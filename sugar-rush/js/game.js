@@ -19,9 +19,9 @@ const state = {
   carbs: { pending: [] },
   time: { day: 1, hour: 7.0, week: 1 },
   score: { timeInRange: [], bgSamples: [], collectiblesFound: [], totalCollectibles: 50, mealsManaged: 0, snacksRemembered: 0 },
-  narrative: { currentPassage: null, eventsCompleted: [], choices: {}, dayEvents: {}, pendingAfterRescue: null, rescueInProgress: false, lowBGHandled: false },
+  narrative: { currentPassage: null, resumePassage: null, eventsCompleted: [], choices: {}, dayPicks: null, pendingAfterRescue: null, rescueInProgress: false, lowBGHandled: false, lowsToday: 0, lowsWeek: 0 },
   companion: { name: '', mood: 'happy' },
-  flags: { setupComplete: false }
+  flags: { setupComplete: false, weekComplete: false, tipsOff: false, tips: {}, seenGames: {} }
 };
 
 // ============================================
@@ -57,51 +57,82 @@ function resetDayScore() {
 // ============================================
 // 3. BG SIMULATION
 // ============================================
+// Insulin is simulated internally as "how much it will lower BG". The player never
+// sees units, ratios or correction factors. In this game, taking insulin always means
+// "following the plan from your diabetes team", because everyone's plan is different.
 
 const BGConfig = {
-  carbRaisePer1g: 0.1, carbAbsorptionFast: 0.5, carbAbsorptionSlow: 2.0,
-  insulinDropPer1u: 3.0, insulinOnsetDelay: 0.25, insulinDuration: 4.0,
-  exerciseDropPerHour: 1.0, basalDriftPerHour: 0.3, basalInsulinPerHour: 0.3,
-  targetLow: 5.0, targetHigh: 12.0, minBG: 2.0, maxBG: 30.0,
-  carbRatio: 10, correctionFactor: 3.0, correctionTarget: 8.0,
-  energyDrain: [
-    { min: 5, max: 12, rate: 0 }, { min: 12, max: 15, rate: 5 },
-    { min: 15, max: 30, rate: 15 }, { min: 3, max: 5, rate: 10 }, { min: 2, max: 3, rate: 25 }
-  ],
+  carbRaisePer1g: 0.1,
+  absorbHours: { glucose: 0.3, fast: 1.0, slow: 2.5 },
+  insulinOnsetDelay: 0.25, insulinDuration: 2.5,
+  mealCoverage: 1.0,
+  correctionTarget: 7.0, correctionStrength: 0.8,
+  backgroundDriftPerHour: -0.15,
+  targetLow: 5.0, targetHigh: 10.0, hypo: 4.0, minBG: 2.5, maxBG: 25.0,
   energyRecoveryPerHour: 10
 };
 
-function eatFood(grams, speed) { state.carbs.pending.push({ time: state.time.hour, grams, speed: speed || 'fast', absorbed: 0 }); }
-function doseInsulin(units) { state.insulin.pendingDoses.push({ time: state.time.hour, units, delivered: 0 }); }
-function recommendedDose(carbs, currentBG) {
-  let d = carbs / BGConfig.carbRatio;
-  if (currentBG > BGConfig.correctionTarget) d += (currentBG - BGConfig.correctionTarget) / BGConfig.correctionFactor;
-  return Math.round(d * 2) / 2;
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+function dayName(d) { return DAY_NAMES[((d || 1) - 1) % 7]; }
+function isWeekend(d) { const n = ((d || 1) - 1) % 7; return n === 5 || n === 6; }
+
+function eatFood(grams, speed) {
+  if (grams > 0) state.carbs.pending.push({ grams, speed: speed || 'slow', absorbed: 0 });
+}
+
+function insulinOnBoard() {
+  return state.insulin.pendingDoses.reduce((a, d) => a + (d.drop - d.delivered), 0);
+}
+
+// Mealtime insulin, following the plan. preBolus = taken a little before eating.
+function takeMealInsulin(carbs, preBolus) {
+  const drop = carbs * BGConfig.carbRaisePer1g * BGConfig.mealCoverage;
+  if (drop > 0) state.insulin.pendingDoses.push({ age: preBolus ? 0.17 : 0, drop, delivered: 0 });
+}
+
+// Following the plan for highs. Insulin already working is counted, so doses never stack.
+function takeCorrection() {
+  const excess = state.bg.current - BGConfig.correctionTarget - insulinOnBoard();
+  if (excess > 0.5) state.insulin.pendingDoses.push({ age: 0, drop: excess * BGConfig.correctionStrength, delivered: 0 });
+}
+
+// Eat a meal and take mealtime insulin per the plan (the plan also covers being above range).
+function eatMeal(carbs, speed, preBolus) {
+  takeMealInsulin(carbs, preBolus);
+  if (state.bg.current > BGConfig.targetHigh) takeCorrection();
+  eatFood(carbs, speed);
+  state.score.mealsManaged++;
+}
+
+// Snacks: small ones are eaten as-is; bigger ones are covered by the plan.
+function eatSnack(carbs, speed) {
+  if (carbs > 20) takeMealInsulin(carbs);
+  eatFood(carbs, speed);
+  state.score.snacksRemembered++;
 }
 
 function tick(deltaHours) {
   if (deltaHours <= 0) return;
   let bgDelta = 0;
   for (const c of state.carbs.pending) {
-    if (c.absorbed >= c.grams) continue;
-    const rate = c.speed === 'fast' ? BGConfig.carbAbsorptionFast : BGConfig.carbAbsorptionSlow;
-    const abs = Math.min((c.grams / rate) * deltaHours, c.grams - c.absorbed);
+    const hrs = BGConfig.absorbHours[c.speed] || BGConfig.absorbHours.slow;
+    const abs = Math.min((c.grams / hrs) * deltaHours, c.grams - c.absorbed);
     c.absorbed += abs;
     bgDelta += abs * BGConfig.carbRaisePer1g;
   }
-  state.carbs.pending = state.carbs.pending.filter(c => c.absorbed < c.grams);
+  state.carbs.pending = state.carbs.pending.filter(c => c.absorbed < c.grams - 0.01);
+  const end = BGConfig.insulinOnsetDelay + BGConfig.insulinDuration;
   for (const d of state.insulin.pendingDoses) {
-    if (d.delivered >= d.units) continue;
-    const elapsed = state.time.hour - d.time;
-    if (elapsed < BGConfig.insulinOnsetDelay) continue;
-    if (elapsed > BGConfig.insulinDuration + BGConfig.insulinOnsetDelay) { d.delivered = d.units; continue; }
-    const del = Math.min((d.units / BGConfig.insulinDuration) * deltaHours, d.units - d.delivered);
+    const before = d.age;
+    d.age += deltaHours;
+    const from = Math.max(before, BGConfig.insulinOnsetDelay), to = Math.min(d.age, end);
+    if (to <= from) continue;
+    const del = Math.min((d.drop / BGConfig.insulinDuration) * (to - from), d.drop - d.delivered);
     d.delivered += del;
-    bgDelta -= del * BGConfig.insulinDropPer1u;
+    bgDelta -= del;
   }
-  state.insulin.pendingDoses = state.insulin.pendingDoses.filter(d => d.delivered < d.units);
-  if (state.insulin.basalActive) bgDelta += (BGConfig.basalDriftPerHour - BGConfig.basalInsulinPerHour) * deltaHours;
-  else bgDelta += BGConfig.basalDriftPerHour * deltaHours;
+  state.insulin.pendingDoses = state.insulin.pendingDoses.filter(d => d.delivered < d.drop - 0.01 && d.age < end + 0.01);
+  bgDelta += BGConfig.backgroundDriftPerHour * deltaHours;
   const newBG = Math.max(BGConfig.minBG, Math.min(BGConfig.maxBG, state.bg.current + bgDelta));
   const diff = newBG - state.bg.current;
   let trend = 'stable';
@@ -111,17 +142,29 @@ function tick(deltaHours) {
   if (diff < -1.5 * deltaHours) trend = 'falling_fast';
   updateBG(newBG, trend);
   const bg = state.bg.current;
-  let eDelta = 0;
-  if (bg >= BGConfig.targetLow && bg <= BGConfig.targetHigh) eDelta = BGConfig.energyRecoveryPerHour * deltaHours;
-  else { for (const z of BGConfig.energyDrain) { if (bg >= z.min && bg < z.max) { eDelta = -z.rate * deltaHours; break; } } }
-  updateEnergy(state.energy + eDelta);
+  let eDelta;
+  if (inRange(bg)) eDelta = BGConfig.energyRecoveryPerHour;
+  else if (bg < BGConfig.hypo) eDelta = -15;
+  else if (bg < BGConfig.targetLow) eDelta = -4;
+  else if (bg <= 14) eDelta = -4;
+  else eDelta = -10;
+  updateEnergy(state.energy + eDelta * deltaHours);
+}
+
+function inRange(v) { return v >= BGConfig.targetLow && v <= BGConfig.targetHigh; }
+
+// Move the clock forward to a set time of day, running the BG simulation for the gap.
+function setClock(h) {
+  const d = h - state.time.hour;
+  if (d > 0) { tick(d); state.time.hour = h; notify(); }
 }
 
 function getBGZone(v) {
-  if (v < 3) return { zone: 'severe-low', label: 'Severe Low', color: 'red' };
-  if (v < 5) return { zone: 'low', label: 'Low', color: 'yellow' };
-  if (v <= 12) return { zone: 'target', label: 'In Range', color: 'green' };
-  if (v <= 15) return { zone: 'high', label: 'High', color: 'yellow' };
+  if (v < 3) return { zone: 'severe-low', label: 'Very Low', color: 'red' };
+  if (v < 4) return { zone: 'low', label: 'Low', color: 'red' };
+  if (v < 5) return { zone: 'below', label: 'A Bit Low', color: 'yellow' };
+  if (v <= 10) return { zone: 'target', label: 'In Range', color: 'green' };
+  if (v <= 14) return { zone: 'high', label: 'High', color: 'yellow' };
   return { zone: 'very-high', label: 'Very High', color: 'red' };
 }
 function getTrendArrow(t) { return { rising_fast: '↑↑', rising: '↑', stable: '→', falling: '↓', falling_fast: '↓↓' }[t] || '→'; }
@@ -133,26 +176,80 @@ function getTrendArrow(t) { return { rising_fast: '↑↑', rising: '↑', stabl
 const passages = {};
 function addPassage(id, p) { passages[id] = p; }
 
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function shuffle(arr) { return arr.slice().sort(() => Math.random() - 0.5); }
+
+// Emoji "illustration" panel. mood picks the background; default follows the clock.
+function sceneArt(big, rows, mood) {
+  if (!mood) {
+    const h = state.time.hour;
+    mood = h < 9 ? 'morning' : h < 17 ? 'day' : h < 20 ? 'evening' : 'night';
+  }
+  return '<div class="scene-art scene-' + mood + '"><div class="scene-big">' + big + '</div>' +
+    (rows || []).map(r => '<div class="scene-row">' + r + '</div>').join('') + '</div>';
+}
+
+// Re-selectable multiple choice. Feedback shows on every pick; the player can change
+// their pick freely. onPick(isCorrect, option) lets the caller show/hide a Next button.
+function choiceQuiz(container, options, onPick) {
+  const wrap = document.createElement('div');
+  wrap.className = 'quiz';
+  const fb = document.createElement('div');
+  fb.className = 'quiz-feedback';
+  options.forEach(o => {
+    const b = document.createElement('button');
+    b.className = 'quiz-option';
+    b.innerHTML = o.text;
+    b.addEventListener('click', () => {
+      wrap.querySelectorAll('.quiz-option').forEach(x => x.classList.remove('picked'));
+      b.classList.add('picked', o.correct ? 'right' : 'tried');
+      fb.className = 'quiz-feedback ' + (o.correct ? 'right' : 'try');
+      fb.innerHTML = (o.correct ? '✅ ' : '🤔 ') + o.feedback + (o.correct ? '' : ' <em>Pick another one.</em>');
+      if (onPick) onPick(!!o.correct, o);
+    });
+    wrap.appendChild(b);
+  });
+  container.appendChild(wrap);
+  container.appendChild(fb);
+}
+
 function renderPassage(id, opts) {
+  if (!id) return;
   opts = opts || {};
   const p = passages[id];
   if (!p) { console.error('Missing passage:', id); return; }
   state.narrative.currentPassage = id;
+  closeTip();
   const container = document.getElementById('passage-container');
   container.innerHTML = '';
   document.getElementById('narrative').scrollTop = 0;
   // AUDIO: Play passage transition sound
   if (p.onEnter && !opts.skipOnEnter) p.onEnter(state);
-  // LOW-BG INTERRUPT — after onEnter may have ticked BG, check if rescue is needed.
-  // Skips rescue-related passages, the Day 1 scripted hypo tutorial, and the scheduled
-  // Treat-the-Low mini-game intro so they don't retrigger the check.
+  // Low BG interrupt: after onEnter may have moved BG, divert to the rescue flow if needed.
   if (!opts.skipOnEnter && checkLowBGInterrupt(id)) return;
-  // If BG is now healthy, clear the handled flag so a future low can trigger again.
-  if (state.bg.current >= 5 && state.narrative.lowBGHandled) state.narrative.lowBGHandled = false;
+  if (state.bg.current >= BGConfig.targetLow && state.narrative.lowBGHandled) state.narrative.lowBGHandled = false;
   const div = document.createElement('div');
   div.className = p.noWrap ? '' : 'passage';
   div.innerHTML = typeof p.content === 'function' ? p.content(state) : p.content;
   container.appendChild(div);
+
+  if (p.quiz) {
+    const q = p.quiz(state);
+    const holder = document.createElement('div');
+    holder.className = 'passage-quiz';
+    container.appendChild(holder);
+    const w = document.createElement('div');
+    w.style.marginTop = '16px';
+    w.style.display = 'none';
+    const btn = document.createElement('button');
+    btn.className = 'continue-btn';
+    btn.textContent = q.continueText || 'Continue';
+    btn.addEventListener('click', () => { if (q.onDone) q.onDone(state); notify(); renderPassage(typeof q.next === 'function' ? q.next(state) : q.next); });
+    w.appendChild(btn);
+    choiceQuiz(holder, q.options, ok => { w.style.display = ok ? '' : 'none'; });
+    container.appendChild(w);
+  }
+
   const choices = typeof p.choices === 'function' ? p.choices(state) : p.choices;
   if (choices && choices.length > 0) {
     const cd = document.createElement('div');
@@ -161,7 +258,7 @@ function renderPassage(id, opts) {
       if (c.condition && !c.condition(state)) continue;
       const btn = document.createElement('button');
       btn.className = 'choice-btn';
-      btn.textContent = typeof c.text === 'function' ? c.text(state) : c.text;
+      btn.innerHTML = typeof c.text === 'function' ? c.text(state) : c.text;
       btn.addEventListener('click', () => {
         // AUDIO: Play choice selection click
         if (c.onSelect) c.onSelect(state);
@@ -173,103 +270,170 @@ function renderPassage(id, opts) {
     }
     container.appendChild(cd);
   }
-  if (p.next && (!choices || choices.length === 0)) {
-    const next = typeof p.next === 'function' ? p.next(state) : p.next;
-    const nextOpts = typeof p.nextOpts === 'function' ? p.nextOpts(state) : p.nextOpts;
+  if (p.next && (!choices || choices.length === 0) && !p.quiz) {
     const btn = document.createElement('button');
     btn.className = 'continue-btn';
+    btn.id = 'passage-continue';
     btn.textContent = p.continueText || 'Continue';
-    btn.addEventListener('click', () => { if (p.onExit) p.onExit(state); notify(); renderPassage(next, nextOpts); });
+    btn.addEventListener('click', () => {
+      if (p.onExit) p.onExit(state);
+      const next = typeof p.next === 'function' ? p.next(state) : p.next;
+      const nextOpts = typeof p.nextOpts === 'function' ? p.nextOpts(state) : p.nextOpts;
+      notify();
+      renderPassage(next, nextOpts);
+    });
     const w = document.createElement('div');
     w.style.marginTop = '20px';
     w.appendChild(btn);
     container.appendChild(w);
   }
   notify();
+  if (state.flags.setupComplete) saveGame();
+  if (p.afterRender) setTimeout(() => p.afterRender(state, container), 60);
 }
 
-// --- Low BG narrative interrupt ---
-// When BG drops into hypo territory, divert the player into a rescue passage
-// chain that launches the Treat-the-Low mini-game. After resolution, the
-// original passage is re-rendered with skipOnEnter so its side effects don't
-// double-fire.
+// --- Low BG ---
+// Under 4.0 mmol/L is a low. The rescue flow mirrors real life: fast sugar, wait 15
+// minutes, check again (treat again if still under 4), then a snack with carbs and
+// protein if the next meal is a while away. Repeat lows in a day get a shorter flow.
 
-// Passages we never interrupt (they ARE the rescue flow, or already teach hypo).
-const LOW_BG_INTERRUPT_EXEMPT = /^(low-bg-rescue|day1-hypo)/;
+const LOW_BG_INTERRUPT_EXEMPT = /^(low-bg-rescue|day1-hypo|setup-|title|dedication|slot-)/;
 
-function isLowBG(v) { return v < 4.0; } // ≤3.9 mmol/L = hypoglycemia
+function isLowBG(v) { return v < BGConfig.hypo; }
 function isSevereLowBG(v) { return v < 3.0; }
+function isMealPassage(id) { return /meal|breakfast|lunch|dinner|brunch|anchor-solo|anchor-estimation|bedtime|-snack-/.test(id || ''); }
+
+function beginRescue(resumeId, fresh, mealSoon) {
+  const n = state.narrative;
+  n.rescueInProgress = true;
+  n.lowBGHandled = true;
+  n.pendingAfterRescue = resumeId;
+  n.resumeFresh = !!fresh;
+  n.rescueMealSoon = (mealSoon === undefined) ? isMealPassage(resumeId) : mealSoon;
+  n.lowsToday = (n.lowsToday || 0) + 1;
+  n.lowsWeek = (n.lowsWeek || 0) + 1;
+  renderPassage('low-bg-rescue');
+}
 
 function checkLowBGInterrupt(currentId) {
-  if (state.narrative.rescueInProgress) return false;
-  if (state.narrative.lowBGHandled) return false;
-  // Don't hijack passages that are themselves meant to teach low BG
-  // or that are mid-meal (let the meal resolve, then the post-meal passage catches it).
+  const n = state.narrative;
+  if (n.rescueInProgress || n.lowBGHandled) return false;
   if (LOW_BG_INTERRUPT_EXEMPT.test(currentId || '')) return false;
   if (!isLowBG(state.bg.current)) return false;
-  state.narrative.rescueInProgress = true;
-  state.narrative.lowBGHandled = true;
-  state.narrative.pendingAfterRescue = currentId;
-  renderPassage('low-bg-rescue');
+  beginRescue(currentId, false);
   return true;
 }
 
+// Scripted lows (Day 1 lesson, practice): resume at nextId and run its onEnter.
+function startLowRescue(nextId, mealSoon) { beginRescue(nextId, true, mealSoon); }
+
+const RECOVERY_SNACKS = [
+  { emoji: '🧀🍘', name: 'Cheese and crackers', carbs: 15 },
+  { emoji: '🥪', name: 'Half a sandwich', carbs: 15 },
+  { emoji: '🍎🧀', name: 'Apple slices and a cheese stick', carbs: 15 },
+  { emoji: '🥛🍘', name: 'Glass of milk and a couple of crackers', carbs: 15 },
+  { emoji: '🫓🫘', name: 'Half a pita with hummus', carbs: 15 },
+  { emoji: '🥣🍓', name: 'Plain yogurt with a few berries', carbs: 15 }
+];
+
 function registerLowBGRescuePassages() {
-  // The alert — companion reacts, symptoms described, player chooses to treat.
   addPassage('low-bg-rescue', {
     content: (s) => {
-      const bg = s.bg.current;
-      const severe = isSevereLowBG(bg);
+      const bg = s.bg.current, severe = isSevereLowBG(bg), repeat = (s.narrative.lowsToday || 1) > 1;
       const symptoms = severe
-        ? 'Your hands shake hard. Your vision tunnels. Your heart pounds in your ears. This is serious.'
-        : 'Your hands feel trembly. A thin sweat breaks on your forehead. Suddenly you\'re starving.';
-      const pipLine = severe
-        ? '"Hey — <strong>stop</strong>. Look at me. That number is dangerous. Fast sugar, right now, no dosing."'
-        : '"You\'re low. Stop what you\'re doing. Time for fast sugar — 15 grams."';
-      return '<h2>⚠️ Low Blood Sugar' + (severe ? ' — Severe' : '') + '</h2>' +
-        '<p class="passage-scene">' + symptoms + '</p>' +
-        '<p>BG: <strong style="color:var(--zone-red);">' + bg.toFixed(1) + '</strong> mmol/L — ' + getBGZone(bg).label + '.</p>' +
-        '<p><strong>' + s.companion.name + ':</strong> ' + pipLine + '</p>' +
-        '<p><small>Low BG (hypoglycemia) is anything under 4.0 mmol/L. It can happen to every T1D. What matters is catching it and treating it — fast sugar, then wait 15 minutes, then recheck. This is the <strong>15-15 rule</strong>.</small></p>';
+        ? pick(['Your hands are shaking hard and it is tough to think straight.', 'Everything feels slow and far away. Your heart is pounding.'])
+        : pick(['Your hands feel trembly.', 'You feel sweaty and suddenly very hungry.', 'You feel dizzy and a bit grumpy.', 'Your legs feel wobbly and your head feels foggy.']);
+      const check = s.player.device.bgMonitor === 'cgm' ? 'Your CGM beeps.' : 'You check with your meter.';
+      const cause = s.narrative.lowCause ? '<p class="passage-scene">' + s.narrative.lowCause + '</p>' : '';
+      s.narrative.lowCause = null;
+      const pip = repeat
+        ? pick(['Another low. You know the drill: fast sugar first.', 'Low again. Stop, treat, wait.'])
+        : severe ? 'Stop everything. Fast sugar right now, and tell a grown-up who is nearby.'
+                 : 'You\'re under 4. Stop what you\'re doing. Fast sugar first.';
+      return sceneArt(severe ? '🚨' : '⚠️', [severe ? '😵‍💫 ➜ 🍬' : '😟 ➜ 🍬'], 'alert') +
+        '<h2>Low Blood Sugar</h2>' + cause +
+        '<p>' + check + ' <strong class="bg-big red">' + bg.toFixed(1) + '</strong> mmol/L. ' + symptoms + '</p>' +
+        '<p><strong>' + s.companion.name + ':</strong> "' + pip + '"</p>' +
+        (repeat ? '' : '<div class="tip-box">💡 Under <strong>4.0</strong> is a low. The plan: <strong>fast sugar</strong>, then <strong>wait 15 minutes</strong>, then <strong>check again</strong>. Your diabetes team will tell you how much fast sugar is right for you.</div>');
     },
-    onEnter: (s) => {
-      const severe = isSevereLowBG(s.bg.current);
-      showCompanion(severe ? 'Severe low — fast sugar now!' : 'You\'re low. Let\'s handle it.', 4000);
-    },
+    onEnter: (s) => { showCompanion(isSevereLowBG(s.bg.current) ? 'Fast sugar now!' : 'Low! Fast sugar first.', 5000); },
     choices: [{
-      text: '▶ Treat the low →',
+      text: '🍬 Treat the low',
       next: function() {
-        playMiniGame('Treat-the-Low', { currentBG: state.bg.current }, 'low-bg-rescue-after');
+        const seen = state.flags.seenGames && state.flags.seenGames['Treat-the-Low'];
+        playMiniGame('Treat-the-Low', { currentBG: state.bg.current, skipIntro: seen }, 'low-bg-rescue-wait');
         return null;
       }
     }]
   });
 
-  // After the mini-game: apply sugar, teach recovery, resume the original passage.
-  addPassage('low-bg-rescue-after', {
-    content: (s) => '<h2>Back in Range</h2>' +
-      '<p>You wait out the 15 minutes. Slowly, the trembling fades. The fog in your head lifts. The world comes back into focus.</p>' +
-      '<p>BG: <strong style="color:var(--zone-green);">' + s.bg.current.toFixed(1) + '</strong> mmol/L — ' + getBGZone(s.bg.current).label + '.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Good. That\'s going to happen sometimes — even when you do everything right. What matters is that you <em>felt it</em>, <em>checked it</em>, and <em>treated it</em>. That\'s the whole job."</p>',
-    onEnter: (s) => {
-      // Apply the 15g fast-sugar rescue: bring BG up and set a rising trend.
-      eatFood(15, 'fast');
-      tick(0.25); advanceTime(0.25);
-      // Ensure we're safely above the hypo threshold even if absorption is slow.
-      if (s.bg.current < 5.5) { s.bg.current = 5.5; }
-      s.bg.trend = 'rising';
-      notify();
-      if (collectBetaCell('fifteen-fifteen-rule')) {
-        setTimeout(() => showBetaCellNotification(betaCellMap['fifteen-fifteen-rule'].name, betaCellMap['fifteen-fifteen-rule'].cat), 500);
+  addPassage('low-bg-rescue-wait', {
+    content: (s) => sceneArt('⏳', [pick(['🪑 😮‍💨', '🛋️ 😌', '🌳 🪑 😮‍💨'])]) +
+      '<h2>Wait 15 Minutes</h2>' +
+      '<p>' + pick(['You sit down and rest.', 'You stay put and take some slow breaths.', 'You find a comfy spot and rest.']) + ' No running around until you check again.</p>' +
+      '<div class="wait-timer"><div class="wait-timer-fill"></div></div>',
+    onEnter: (s) => { eatFood(s.narrative.lastLowTreat || 15, 'glucose'); },
+    afterRender: (s, c) => {
+      const btn = document.getElementById('passage-continue');
+      if (!btn) return;
+      btn.disabled = true;
+      btn.textContent = '⏱️ Waiting...';
+      setTimeout(() => { btn.disabled = false; btn.textContent = '🩸 Check again'; }, 3500);
+    },
+    next: 'low-bg-rescue-recheck'
+  });
+
+  addPassage('low-bg-rescue-recheck', {
+    content: (s) => {
+      const bg = s.bg.current;
+      if (isLowBG(bg)) {
+        return sceneArt('🩸', ['⏱️ ➜ 🩸 ' + bg.toFixed(1)], 'alert') + '<h2>Check Again</h2>' +
+          '<p>BG: <strong class="bg-big red">' + bg.toFixed(1) + '</strong>. Still under 4. That happens sometimes. Treat again, then wait another 15 minutes.</p>';
       }
+      return sceneArt('🩸', ['⏱️ ➜ 🩸 📈'], 'day') + '<h2>Check Again</h2>' +
+        '<p>BG: <strong class="bg-big ' + (inRange(bg) ? 'green' : 'yellow') + '">' + bg.toFixed(1) + '</strong>. Back above 4.</p>';
+    },
+    onEnter: () => { tick(0.25); advanceTime(0.25); },
+    choices: (s) => isLowBG(s.bg.current)
+      ? [{ text: '🍬 Fast sugar again', onSelect: (st) => { st.narrative.lastLowTreat = 15; }, next: 'low-bg-rescue-wait' }]
+      : [{ text: 'Continue', next: 'low-bg-rescue-followup' }]
+  });
+
+  addPassage('low-bg-rescue-followup', {
+    content: (s) => {
+      if (s.narrative.rescueMealSoon) {
+        return '<h2>Back on Track</h2><p>' + (/-snack-/.test(s.narrative.pendingAfterRescue || '')
+          ? 'It\'s snack time anyway. A snack with some carbs and some protein will help you stay steady.'
+          : 'Your next meal is coming up soon. That will help keep you steady.') + '</p>';
+      }
+      return sceneArt('🍽️', ['🧀 🍘 🍎 🥛']) + '<h2>Keep It Steady</h2>' +
+        '<p>Your next meal is a while away. A small snack with some carbs and some protein helps stop your BG from dipping again.</p>';
+    },
+    choices: (s) => s.narrative.rescueMealSoon
+      ? [{ text: 'Continue', next: 'low-bg-rescue-after' }]
+      : shuffle(RECOVERY_SNACKS).slice(0, 3).map(sn => ({
+          text: sn.emoji + ' ' + sn.name + ' <span class="carb-tag">~' + sn.carbs + 'g carbs + protein</span>',
+          onSelect: () => { eatFood(sn.carbs, 'slow'); },
+          next: 'low-bg-rescue-after'
+        }))
+  });
+
+  addPassage('low-bg-rescue-after', {
+    content: (s) => '<h2>All Set</h2>' +
+      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "' + pick([
+        'You noticed it, you treated it, you checked again. That\'s the whole job.',
+        'Nicely handled. Lows can happen even when you do everything right.',
+        'Done. Some people feel tired after a low, so take it easy for a bit.'
+      ]) + '"</p>',
+    onEnter: (s) => {
+      if (collectBetaCell('fifteen-fifteen-rule')) setTimeout(() => showBetaCellNotification(betaCellMap['fifteen-fifteen-rule'].name, betaCellMap['fifteen-fifteen-rule'].cat), 500);
       updateConfidence(3);
     },
-    onExit: (s) => {
-      s.narrative.rescueInProgress = false;
-    },
+    onExit: (s) => { s.narrative.rescueInProgress = false; s.narrative.lowBGHandled = false; },
     next: (s) => s.narrative.pendingAfterRescue || ('d' + s.time.day + '-evening'),
-    nextOpts: { skipOnEnter: true },
-    continueText: 'Resume the day'
+    nextOpts: (s) => ({ skipOnEnter: !s.narrative.resumeFresh }),
+    continueText: 'Back to the day'
   });
 }
 
@@ -304,8 +468,21 @@ function initHUD() {
   onChange(updateHUD);
   document.getElementById('hud-collectibles').style.cursor = 'pointer';
   document.getElementById('hud-collectibles').addEventListener('click', openJournal);
+  document.getElementById('hud-menu')?.addEventListener('click', openMenu);
+  document.getElementById('companion-face')?.addEventListener('click', pipHint);
 }
-function showHUD() { hud.el.classList.remove('hidden'); updateAvatar(); }
+function showHUD() {
+  hud.el.classList.remove('hidden');
+  document.getElementById('companion').classList.remove('hidden');
+  updateAvatar();
+  startPipBlink();
+}
+function hideHUD() {
+  hud.el.classList.add('hidden');
+  document.getElementById('companion').classList.add('hidden');
+  document.body.dataset.bg = '';
+  hud.effects.className = '';
+}
 
 function updateHUD() {
   if (!hud.el || hud.el.classList.contains('hidden')) return;
@@ -315,100 +492,105 @@ function updateHUD() {
   hud.bgValue.textContent = bgDisplay(bg);
   hud.bgValue.style.color = colorVar;
   hud.bgTrend.textContent = state.player.device.bgMonitor === 'cgm' ? getTrendArrow(state.bg.trend) : '';
-  const pct = Math.max(0, Math.min(100, ((bg - 2) / 18) * 100));
-  hud.bgFill.style.width = pct + '%';
+  hud.bgFill.style.width = Math.max(0, Math.min(100, ((bg - 2) / 16) * 100)) + '%';
   hud.bgFill.style.backgroundColor = colorVar;
   hud.energyFill.style.width = state.energy + '%';
   hud.confidenceValue.textContent = state.confidence;
-  hud.day.textContent = 'Day ' + state.time.day;
-  const h = Math.floor(state.time.hour), m = Math.round((state.time.hour - h) * 60);
+  hud.day.textContent = dayName(state.time.day).slice(0, 3) + ' · Day ' + state.time.day;
+  const h = Math.floor(state.time.hour), m = Math.round((state.time.hour - h) * 60) % 60;
   const period = h >= 12 ? 'PM' : 'AM', dh = h > 12 ? h - 12 : (h === 0 ? 12 : h);
   hud.clock.textContent = dh + ':' + String(m).padStart(2, '0') + ' ' + period;
   hud.betaCells.textContent = state.score.collectiblesFound.length + ' / ' + state.score.totalCollectibles;
-  hud.effects.className = '';
-  if (bg < 3) hud.effects.className = 'low-severe';
-  else if (bg < 5) hud.effects.className = 'low-mild';
-  else if (bg > 15) hud.effects.className = 'high-severe';
-  else if (bg > 12) hud.effects.className = 'high-mild';
+  document.body.dataset.bg = zone.zone;
+  // Edge glow only. Nothing blurs or shakes the text, so the game stays readable.
+  hud.effects.className = bg < 4 ? 'low-severe' : bg < 5 ? 'low-mild' : bg > 14 ? 'high-severe' : bg > 10 ? 'high-mild' : '';
+  const badge = document.getElementById('pip-badge');
+  if (badge) badge.textContent = bg < 5 ? '⬇' : bg > 10 ? '⬆' : '';
   updateAvatar();
-  if (!document.getElementById('companion').classList.contains('hidden')) pipMoodFromBG();
+  pipMoodFromBG();
 }
 
 function updateAvatar() {
   if (!hud.avatarFigure) return;
   const a = state.player.appearance;
-  const hatEl = hud.avatarFigure.querySelector('.av-hat');
-  const faceEl = hud.avatarFigure.querySelector('.av-face');
-  const shirtEl = hud.avatarFigure.querySelector('.av-shirt');
-  const shoesEl = hud.avatarFigure.querySelector('.av-shoes');
-  hatEl.textContent = HATS[a.hat] || '';
-  faceEl.textContent = FACES[a.face] || '';
-  shirtEl.style.background = SHIRT_COLORS[a.shirt] || SHIRT_COLORS[0];
-  shoesEl.textContent = SHOES[a.shoes] || '';
+  hud.avatarFigure.querySelector('.av-hat').textContent = a.hat ? HATS[a.hat] : '';
+  hud.avatarFigure.querySelector('.av-face').textContent = FACES[a.face] || FACES[0];
+  hud.avatarFigure.querySelector('.av-shirt').style.background = SHIRT_COLORS[a.shirt] || SHIRT_COLORS[0];
+  hud.avatarFigure.querySelector('.av-shoes').textContent = SHOES[a.shoes] || SHOES[0];
   if (hud.avatarName) hud.avatarName.textContent = state.player.name || '';
 }
 
 // ============================================
 // 6. COMPANION (Pip)
 // ============================================
+// Pip stays on screen during play. The speech bubble comes and goes.
 
 let companionTimeout = null;
 let pipBlinkInterval = null;
-let pipMood = 'neutral';
 
 function setPipMood(mood) {
-  pipMood = mood;
   const face = document.getElementById('companion-face');
   if (!face) return;
   face.classList.remove('happy', 'worried', 'alert', 'thinking');
   if (mood !== 'neutral') face.classList.add(mood);
-  const led = document.getElementById('pip-led');
-  if (led) {
-    if (mood === 'alert') { led.style.background = 'var(--zone-red)'; led.style.boxShadow = '0 0 4px var(--zone-red)'; }
-    else if (mood === 'worried') { led.style.background = 'var(--zone-yellow)'; led.style.boxShadow = '0 0 4px var(--zone-yellow)'; }
-    else { led.style.background = 'var(--zone-green)'; led.style.boxShadow = '0 0 4px var(--zone-green)'; }
-  }
 }
 
 function pipBlink() {
   const face = document.getElementById('companion-face');
-  if (!face || face.classList.contains('hidden')) return;
+  if (!face) return;
   face.classList.add('blink');
   setTimeout(() => face.classList.remove('blink'), 150);
 }
 
 function startPipBlink() {
   if (pipBlinkInterval) clearInterval(pipBlinkInterval);
-  pipBlinkInterval = setInterval(() => {
-    if (Math.random() < 0.4) pipBlink();
-  }, 2500);
+  pipBlinkInterval = setInterval(() => { if (Math.random() < 0.4) pipBlink(); }, 2500);
 }
 
 function pipMoodFromBG() {
   const bg = state.bg.current;
-  if (bg < 4) setPipMood('alert');
-  else if (bg < 5 || bg > 15) setPipMood('worried');
-  else if (bg >= 5 && bg <= 10) setPipMood('happy');
-  else setPipMood('neutral');
+  if (bg < 4 || bg > 14) setPipMood('alert');
+  else if (bg < 5 || bg > 10) setPipMood('worried');
+  else setPipMood('happy');
 }
 
 function showCompanion(text, dur) {
   const el = document.getElementById('companion');
   const face = document.getElementById('companion-face');
+  const bubble = document.getElementById('companion-bubble');
   el.classList.remove('hidden');
-  el.classList.add('entering');
-  setTimeout(() => el.classList.remove('entering'), 400);
+  bubble.classList.remove('hidden');
+  bubble.style.animation = 'none';
+  void bubble.offsetWidth;
+  bubble.style.animation = '';
   document.getElementById('companion-text').textContent = text;
   pipMoodFromBG();
   if (face) {
     face.classList.add('speaking');
     setTimeout(() => face.classList.remove('speaking'), 500);
   }
-  startPipBlink();
+  // AUDIO: Play companion dialogue blip
   if (companionTimeout) clearTimeout(companionTimeout);
-  if (dur > 0) companionTimeout = setTimeout(() => el.classList.add('hidden'), dur);
+  companionTimeout = setTimeout(() => bubble.classList.add('hidden'), dur > 0 ? dur : 7000);
 }
-function hideCompanion() { document.getElementById('companion').classList.add('hidden'); }
+function hideCompanion() { document.getElementById('companion-bubble').classList.add('hidden'); }
+
+// Tap Pip for a hint that fits the moment.
+function pipHint() {
+  const bg = state.bg.current;
+  let line;
+  if (bg < 4) line = 'You\'re under 4. Fast sugar first, then wait 15 minutes and check again.';
+  else if (bg < 5) line = 'A bit low. A snack with some carbs would help. Keep an eye on it.';
+  else if (bg > 14) line = 'Very high. Drink some water, follow your plan for highs, and tell a grown-up if you feel unwell.';
+  else if (bg > 10) line = 'A bit high. Water helps, and your plan for highs will bring it down. It takes time.';
+  else line = pick([
+    'Looking good. Tap the Beta Cell counter (top right) to read what you\'ve learned.',
+    'Carbs plus protein keeps BG steady longest.',
+    'The menu button (☰) shows how saving works.',
+    'In range! Nice.'
+  ]);
+  showCompanion(line, 6000);
+}
 
 function showBetaCellNotification(name, color) {
   const old = document.querySelector('.beta-cell-notification');
@@ -421,14 +603,102 @@ function showBetaCellNotification(name, color) {
   setTimeout(() => div.remove(), 3200);
 }
 
+// --- Tutorial spotlights ---
+// One short tip at a time, pointing at the thing it explains. Each shows once per save.
+const tipQueue = [];
+let tipOpen = false;
+
+function tutorialTip(key, selector, html) {
+  state.flags.tips = state.flags.tips || {};
+  if (state.flags.tips[key] || state.flags.tipsOff) return;
+  tipQueue.push({ key, selector, html });
+  if (!tipOpen) nextTip();
+}
+
+function nextTip() {
+  const t = tipQueue.shift();
+  if (!t) { tipOpen = false; return; }
+  const target = document.querySelector(t.selector);
+  if (!target || state.flags.tipsOff) { nextTip(); return; }
+  tipOpen = true;
+  state.flags.tips[t.key] = true;
+  target.classList.add('tip-target');
+  const host = target.closest('#hud, #companion');
+  const oldZ = host ? host.style.zIndex : '';
+  if (host) host.style.zIndex = 1600;
+  const shield = document.createElement('div');
+  shield.className = 'tip-shield';
+  const box = document.createElement('div');
+  box.className = 'tip-bubble';
+  box.innerHTML = '<div class="tip-pip">🤖</div><div class="tip-text">' + t.html + '</div>' +
+    '<div class="tip-actions"><button class="tip-skip">Skip all tips</button><button class="tip-ok">Got it</button></div>';
+  document.body.appendChild(shield);
+  document.body.appendChild(box);
+  const r = target.getBoundingClientRect();
+  const bw = Math.min(340, window.innerWidth - 24);
+  box.style.width = bw + 'px';
+  box.style.left = Math.max(12, Math.min(window.innerWidth - bw - 12, r.left + r.width / 2 - bw / 2)) + 'px';
+  if (r.top < window.innerHeight / 2) box.style.top = (r.bottom + 14) + 'px';
+  else box.style.top = Math.max(12, r.top - box.offsetHeight - 14) + 'px';
+  const done = () => { target.classList.remove('tip-target'); if (host) host.style.zIndex = oldZ; shield.remove(); box.remove(); nextTip(); };
+  box.querySelector('.tip-ok').addEventListener('click', done);
+  box.querySelector('.tip-skip').addEventListener('click', () => { state.flags.tipsOff = true; tipQueue.length = 0; done(); });
+}
+
+function closeTip() {
+  tipQueue.length = 0;
+  document.querySelectorAll('.tip-shield, .tip-bubble').forEach(e => e.remove());
+  document.querySelectorAll('.tip-target').forEach(e => e.classList.remove('tip-target'));
+  ['hud', 'companion'].forEach(id => { const el = document.getElementById(id); if (el) el.style.zIndex = ''; });
+  tipOpen = false;
+}
+
+// --- In-page modal (used instead of browser confirm boxes) ---
+function showModal(title, html, buttons) {
+  closeModal();
+  const ov = document.createElement('div');
+  ov.id = 'modal-overlay';
+  ov.innerHTML = '<div class="modal-box"><h2>' + title + '</h2><div class="modal-body">' + html + '</div><div class="modal-actions"></div></div>';
+  const actions = ov.querySelector('.modal-actions');
+  buttons.forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = 'modal-btn' + (b.danger ? ' danger' : '') + (b.primary ? ' primary' : '');
+    btn.textContent = b.text;
+    btn.addEventListener('click', () => { closeModal(); if (b.onClick) b.onClick(); });
+    actions.appendChild(btn);
+  });
+  document.body.appendChild(ov);
+}
+function closeModal() { document.getElementById('modal-overlay')?.remove(); }
+
+function openMenu() {
+  saveGame();
+  showModal('☰ Menu',
+    '<p>💾 Your game <strong>saves by itself</strong> after every step.</p>' +
+    '<p>You can refresh the page, close it, or press Back, and pick up right here later: choose <strong>Continue</strong> on your save slot.</p>' +
+    '<p>Playing as <strong>' + (state.player.name || '?') + '</strong> in save slot ' + (currentSlot || '?') + '.</p>',
+    [
+      { text: '▶ Keep playing', primary: true },
+      { text: '📖 Knowledge Journal', onClick: openJournal },
+      { text: state.flags.tipsOff ? '💡 Turn tips back on' : '💡 Turn tips off', onClick: () => { state.flags.tipsOff = !state.flags.tipsOff; saveGame(); } },
+      { text: '🏠 Title screen', onClick: goToTitle }
+    ]);
+}
+
+function goToTitle() {
+  saveGame();
+  hideHUD();
+  renderPassage('title');
+}
+
 const companionLines = {
   afterMealGood: ["Nice choice. That should keep things steady.", "Good call on the meal.", "Solid choice. Let's see how it lands."],
   afterMealOkay: ["Not bad. Could go either way — we'll keep an eye on it.", "That'll work. Let's see what happens."],
   encouragement: ["You're getting the hang of this.", "One step at a time. You're doing it.", "Every check, every count — it all adds up."],
   morningGreeting: ["Morning! Let's see where we're at.", "New day. How's the number?", "Rise and shine. Quick check?"],
   bgGood: ["Right in the green. Nice.", "Look at that number. Solid.", "In range. Good."],
-  bgHigh: ["Running a bit high. Let's bring it down.", "A little elevated. A correction should help.", "Number's climbing. Watch the trend."],
-  bgLow: ["Hey — that number is low. Fast sugar, now.", "You're going low. Stop and treat it.", "Under 4. Don't wait — 15 grams of fast sugar."]
+  bgHigh: ["Running a bit high. Let's bring it down.", "A little high. Water and your plan for highs will help.", "Number's climbing. Watch the trend."],
+  bgLow: ["Hey, that number is low. Fast sugar, now.", "You're going low. Stop and treat it.", "Under 4. Don't wait: fast sugar first."]
 };
 function randomLine(cat) { const pool = companionLines[cat]; return pool ? pool[Math.floor(Math.random() * pool.length)] : ''; }
 
@@ -439,13 +709,13 @@ function randomLine(cat) { const pool = companionLines[cat]; return pool ? pool[
 const betaCells = [
   // BLUE — Facts (13)
   { id: 'what-is-blood-sugar', name: 'What is Blood Sugar?', cat: 'blue', desc: 'Blood sugar (glucose) is the main sugar in your blood. It comes from the food you eat and is your body\'s primary source of energy. Your body needs to keep blood sugar in a healthy range to function well.' },
-  { id: 'what-are-carbs', name: 'What are Carbs?', cat: 'blue', desc: 'Carbohydrates are nutrients found in food that your body breaks down into glucose. Bread, rice, fruit, and sweets all contain carbs. Counting carbs helps you figure out how much insulin you need.' },
+  { id: 'what-are-carbs', name: 'What are Carbs?', cat: 'blue', desc: 'Carbohydrates are nutrients found in food that your body breaks down into glucose. Bread, rice, fruit, and sweets all contain carbs. Counting carbs is how your insulin plan knows what you ate.' },
   { id: 'what-is-insulin', name: 'What is Insulin?', cat: 'blue', desc: 'Insulin is a hormone that acts like a key, unlocking your cells so glucose can enter and be used for energy. In T1D, your body stops making insulin, so you take it through a pump or injections.' },
   { id: 'what-is-t1d', name: 'What is Type 1 Diabetes?', cat: 'blue', desc: 'Type 1 Diabetes is an autoimmune condition where the immune system mistakenly destroys the beta cells in the pancreas that make insulin. It\'s not caused by diet or lifestyle — it can happen to anyone.' },
   { id: 'what-are-ketones', name: 'What are Ketones?', cat: 'blue', desc: 'When your body can\'t use glucose for energy (because there\'s not enough insulin), it burns fat instead. This creates ketones. A small amount is normal, but high ketones can be dangerous and can lead to DKA.' },
   { id: 'what-is-a1c', name: 'What is A1C?', cat: 'blue', desc: 'A1C is a blood test that shows your average blood sugar over the past 2-3 months. It\'s like a report card for blood sugar management. Your diabetes team uses it to see how things are going overall.' },
   { id: 'what-is-basal', name: 'What is Basal Insulin?', cat: 'blue', desc: 'Basal insulin is the background insulin your body needs all day and night, even when you\'re not eating. Pumps deliver it continuously. With injections, you take a long-acting shot once or twice daily.' },
-  { id: 'what-is-bolus', name: 'What is a Bolus?', cat: 'blue', desc: 'A bolus is the insulin you take specifically for food or to correct a high blood sugar. You calculate it based on the carbs you\'re eating and your current BG. Getting the bolus right keeps your BG in range after meals.' },
+  { id: 'what-is-bolus', name: 'What is a Bolus?', cat: 'blue', desc: 'A bolus is the insulin you take for food, or when your blood sugar is high. Your diabetes team gives you a plan for how much to take, based on the carbs you eat and your BG. Everyone\'s plan is different.' },
   { id: 'how-cgm-works', name: 'How Does a CGM Work?', cat: 'blue', desc: 'A Continuous Glucose Monitor (CGM) is a small sensor inserted under the skin that measures glucose in the fluid between cells. It checks every few minutes and shows trends — whether you\'re rising, falling, or stable.' },
   { id: 'how-pump-works', name: 'How Does an Insulin Pump Work?', cat: 'blue', desc: 'An insulin pump is a small device that delivers fast-acting insulin through a tiny tube under the skin. It gives a steady trickle (basal) all day and you program it to give extra (bolus) at meals.' },
   { id: 'what-is-pancreas', name: 'What is the Pancreas?', cat: 'blue', desc: 'The pancreas is an organ behind your stomach. In people without diabetes, it makes insulin automatically when blood sugar rises. In T1D, the insulin-making cells (beta cells) have been destroyed.' },
@@ -454,18 +724,18 @@ const betaCells = [
 
   // GREEN — Skills (13)
   { id: 'carbs-everywhere', name: 'Carbs Are Everywhere (And That\'s Okay)', cat: 'green', desc: 'Carbs aren\'t bad — they\'re fuel! But they\'re in more foods than you might think: bread, rice, fruit, milk, even some vegetables. The key isn\'t avoiding carbs — it\'s knowing how many you\'re eating.' },
-  { id: 'fifteen-fifteen-rule', name: 'The 15-15 Rule — Your Emergency Plan', cat: 'green', desc: 'When you\'re low (under 5 mmol/L): eat 15 grams of fast-acting sugar, wait 15 minutes, then recheck. If still low, repeat. Fast-acting means juice, glucose tabs, or regular soda — not chocolate or candy bars.' },
+  { id: 'fifteen-fifteen-rule', name: 'The 15-15 Rule: Your Low Plan', cat: 'green', desc: 'Under 4.0 mmol/L is a low. Have fast sugar (glucose tabs are a great choice), wait 15 minutes, then check again. Still under 4? Treat again. Your diabetes team will tell you how much fast sugar is right for you. Chocolate and other fatty foods are too slow for a low.' },
   { id: 'estimating-carbs', name: 'Estimating Carbs Without Labels', cat: 'green', desc: 'Not all food comes with nutrition labels. Use your hand as a guide: your fist is about 1 cup, your palm is about a serving of protein. Practice makes this easier — you don\'t need to be exact, just close.' },
   { id: 'bedtime-snacks', name: 'Why Bedtime Snacks Matter', cat: 'green', desc: 'A bedtime snack with carbs AND protein helps keep blood sugar steady overnight. Your body still needs fuel while you sleep. A good combo: crackers with cheese, toast with peanut butter, or a glass of milk.' },
-  { id: 'reading-labels', name: 'Reading a Nutrition Label', cat: 'green', desc: 'On a Canadian Nutrition Facts label, look for: Serving Size (how much is one serving?), Total Carbohydrate (your key number), and Fibre (can subtract from total carbs). Always check how many servings are in the package!' },
+  { id: 'reading-labels', name: 'Reading a Nutrition Label', cat: 'green', desc: 'On a Canadian Nutrition Facts label, look for: Serving Size (how much is one serving?), Carbohydrate (your key number), and Fibre (part of the carbohydrate number; ask your team how they want you to count it). Always check how many servings are in the package!' },
   { id: 'restaurant-carbs', name: 'Counting Carbs at a Restaurant', cat: 'green', desc: 'Restaurants are tricky — no labels! Estimate using what you know: a bun is ~30g, a cup of rice ~45g, a side of fries ~40g. Ask the server about ingredients. Some restaurants have nutrition info online — check before you go.' },
-  { id: 'adjusting-exercise', name: 'Adjusting for Exercise', cat: 'green', desc: 'Exercise lowers blood sugar, sometimes for hours afterward. Before being active: check your BG, have a snack if you\'re under 7, and consider reducing insulin. Keep glucose tabs handy. Every body responds differently — you\'ll learn your pattern.' },
-  { id: 'sick-day-management', name: 'Sick Day Management', cat: 'green', desc: 'When you\'re sick, blood sugar often runs high even if you\'re not eating much. Check BG more often, check ketones, drink lots of water, and take correction doses as needed. Call your diabetes team if ketones stay high.' },
+  { id: 'adjusting-exercise', name: 'Adjusting for Exercise', cat: 'green', desc: 'Exercise lowers blood sugar, sometimes for hours afterwards. Check your BG before you start, keep fast sugar close by, and make an exercise plan with your diabetes team. Every body responds differently, and you\'ll learn your pattern.' },
+  { id: 'sick-day-management', name: 'Sick Day Management', cat: 'green', desc: 'When you\'re sick, blood sugar often runs high even if you\'re not eating much. Check BG and ketones more often, sip fluids, and follow the sick day plan from your diabetes team. Call them if ketones stay high or you can\'t keep fluids down.' },
   { id: 'packing-trip', name: 'Packing for a Trip', cat: 'green', desc: 'Always pack MORE supplies than you think you\'ll need: extra insulin, extra test strips, glucose tabs, snacks, and your medical ID. Keep insulin cool but not frozen. If flying, carry everything in your carry-on — never check it.' },
   { id: 'site-rotation', name: 'Site Rotation and Care', cat: 'green', desc: 'Whether you use a pump or injections, rotating where you put your sites/inject prevents scar tissue buildup. Common spots: belly, thighs, upper arms, and hips. Give each spot time to rest before using it again.' },
   { id: 'portion-estimation', name: 'Portion Size Estimation', cat: 'green', desc: 'Your hand is a built-in measuring tool. Fist = 1 cup (rice, pasta). Palm = protein serving. Thumb = 1 tablespoon (peanut butter). Cupped hand = 1/2 cup (fruit). These aren\'t exact, but they\'re close enough for good carb counting.' },
-  { id: 'pre-bolusing', name: 'Pre-Bolusing — Timing Your Insulin', cat: 'green', desc: 'Taking insulin 10-15 minutes BEFORE eating gives it a head start, so it\'s working when the carbs hit your blood. This helps prevent the post-meal spike. Start small — even 5 minutes early makes a difference.' },
-  { id: 'correcting-high', name: 'Correcting a High', cat: 'green', desc: 'When BG is high, a correction dose brings it back down. Your diabetes team gives you a correction factor that tells you how much one unit of insulin lowers your BG. Use it to figure out how much extra insulin you need. Be careful not to stack corrections too close together, and always wait 2-3 hours before correcting again.' },
+  { id: 'pre-bolusing', name: 'Timing Your Mealtime Insulin', cat: 'green', desc: 'Some people take mealtime insulin a little before eating, so it\'s already working when the food arrives. Ask your diabetes team whether that\'s right for you, and how early.' },
+  { id: 'correcting-high', name: 'Correcting a High', cat: 'green', desc: 'When BG is above your target, follow your diabetes team\'s plan for highs. Insulin you already took keeps working for a few hours, so taking more too soon can stack up and cause a low. Drinking water helps too.' },
 
   // GOLD — Life Wisdom (13)
   { id: 'talking-to-friends', name: 'Talking to Friends About T1D', cat: 'gold', desc: 'Some days you\'ll want to explain everything. Other days you won\'t want to talk about it at all. Both are fine. You don\'t owe anyone an explanation — but having a few people who understand can make things easier.' },
@@ -483,15 +753,15 @@ const betaCells = [
   { id: 'tld-not-define', name: 'T1D Doesn\'t Define You', cat: 'gold', desc: 'You are a person who happens to have Type 1 Diabetes. It\'s part of your life, but it\'s not your whole life. You can do anything — T1D just means you have to plan a little more.' },
 
   // RED — Emergency (11)
-  { id: 'when-call-help', name: 'When to Call for Help', cat: 'red', desc: 'Call your diabetes team or go to the ER if: ketones are high and not coming down, you\'re vomiting and can\'t keep fluids down, BG is over 20 and not responding to corrections, or you feel seriously unwell. Don\'t wait it out — call.' },
+  { id: 'when-call-help', name: 'When to Call for Help', cat: 'red', desc: 'Call your diabetes team or go to the ER if: ketones are high and not coming down, you\'re vomiting and can\'t keep fluids down, BG stays very high even after following your plan, or you feel seriously unwell. Don\'t wait it out — call.' },
   { id: 'dka-signs', name: 'DKA — Know the Signs', cat: 'red', desc: 'Diabetic Ketoacidosis (DKA) is a serious emergency. Signs: very high BG, moderate to high ketones, nausea/vomiting, stomach pain, fruity-smelling breath, rapid breathing, confusion. This needs immediate medical attention.' },
   { id: 'severe-low-others', name: 'Severe Low — What Others Need to Know', cat: 'red', desc: 'If you can\'t treat a low yourself, others need to know: don\'t give food or drink to someone who\'s unconscious, use glucagon if available, call 911, lay the person on their side. Make sure at least one person around you knows this.' },
   { id: 'glucagon-backup', name: 'Glucagon — The Emergency Backup', cat: 'red', desc: 'Glucagon is an emergency medication that raises blood sugar fast. It\'s used when someone is too low to eat or drink. Keep it accessible and make sure people close to you know where it is and how to use it.' },
-  { id: 'sick-day-red-flags', name: 'Sick Day Red Flags', cat: 'red', desc: 'When sick, watch for: ketones rising above moderate, BG staying above 15 despite corrections, inability to keep fluids down, fever that won\'t break. These need a call to your doctor — don\'t try to manage alone.' },
+  { id: 'sick-day-red-flags', name: 'Sick Day Red Flags', cat: 'red', desc: 'When sick, watch for: ketones rising above moderate, BG staying very high even after following your sick day plan, inability to keep fluids down, fever that won\'t break. These need a call to your doctor — don\'t try to manage alone.' },
   { id: 'device-failures', name: 'When Your Devices Fail', cat: 'red', desc: 'Pumps can malfunction, CGMs can fall off, meters can die. Always have a backup plan: carry a spare meter and strips, know how to give injections even if you use a pump, and keep emergency supplies separate from your main kit.' },
   { id: 'overnight-safety', name: 'Overnight Safety', cat: 'red', desc: 'Nighttime lows are a real concern. A bedtime snack, a CGM with alarms, or a planned middle-of-night check can help. Make sure someone in the house knows how to recognize and treat a low while you\'re asleep.' },
   { id: 'exercise-emergencies', name: 'Exercise Emergencies', cat: 'red', desc: 'During intense activity, BG can drop fast. Always have fast-acting sugar within reach. If you feel shaky, dizzy, or confused during exercise, STOP and treat immediately. Health always comes before the game.' },
-  { id: 'stress-bg', name: 'Stress and Blood Sugar', cat: 'red', desc: 'Stress hormones (like adrenaline and cortisol) raise blood sugar. Tests, arguments, scary movies — all can spike your BG. This isn\'t something you did wrong. Recognize the pattern and correct if needed.' },
+  { id: 'stress-bg', name: 'Stress and Blood Sugar', cat: 'red', desc: 'Stress hormones (like adrenaline and cortisol) raise blood sugar. Tests, arguments, scary movies — all can spike your BG. This isn\'t something you did wrong. Notice the pattern and follow your plan for highs.' },
   { id: 'travel-safety', name: 'Travel Safety', cat: 'red', desc: 'When traveling: bring double the supplies you think you need, keep insulin in your carry-on (not checked luggage), carry a doctor\'s letter for security, and know the words for "diabetes" and "insulin" in the local language.' },
   { id: 'medical-id', name: 'Medical ID — Why It Matters', cat: 'red', desc: 'A medical ID bracelet or necklace tells first responders you have T1D if you can\'t speak for yourself. Wear it always — especially during sports, travel, and outings. It\'s a small thing that can save your life.' }
 ];
@@ -572,76 +842,96 @@ function showJournalDetail(bc) {
 }
 
 // ============================================
-// 9. SAVE / LOAD SYSTEM
+// 9. SAVE / LOAD SYSTEM (3 slots)
 // ============================================
+// The game autosaves after every passage. Saves hold the whole game state plus the
+// ids of the events picked for the current day, so a refresh resumes mid-day.
 
-const SAVE_KEY = 'sugarrush-save';
+const SAVE_PREFIX = 'sugarrush-slot-';
+const LEGACY_SAVE_KEY = 'sugarrush-save';
+const SLOT_COUNT = 3;
+const NON_GAME_PASSAGE = /^(title|slot-|dedication|setup-)/;
+let currentSlot = null;
+
+const DEFAULT_STATE = JSON.stringify(state);
+function resetState() {
+  const fresh = JSON.parse(DEFAULT_STATE);
+  Object.keys(fresh).forEach(k => { state[k] = fresh[k]; });
+}
+
+function slotKey(n) { return SAVE_PREFIX + n; }
 
 function saveGame() {
-  const saveData = {
-    version: 2,
-    timestamp: Date.now(),
-    player: state.player,
-    bg: { current: state.bg.current, trend: state.bg.trend, unit: state.bg.unit },
-    energy: state.energy,
-    confidence: state.confidence,
-    time: state.time,
-    score: {
-      timeInRange: state.score.timeInRange,
-      collectiblesFound: state.score.collectiblesFound,
-      totalCollectibles: state.score.totalCollectibles,
-      mealsManaged: state.score.mealsManaged,
-      snacksRemembered: state.score.snacksRemembered
-    },
-    narrative: { eventsCompleted: state.narrative.eventsCompleted, choices: state.narrative.choices },
-    companion: state.companion,
-    flags: state.flags
-  };
+  if (!currentSlot || !state.flags.setupComplete) return false;
+  const cp = state.narrative.currentPassage;
+  if (cp && !NON_GAME_PASSAGE.test(cp)) state.narrative.resumePassage = cp;
+  const data = JSON.parse(JSON.stringify(state));
+  data.bg.history = [];
+  data.version = 3;
+  data.timestamp = Date.now();
+  try { localStorage.setItem(slotKey(currentSlot), JSON.stringify(data)); return true; }
+  catch (e) { console.error('Save failed:', e); return false; }
+}
+
+function readSlot(n) {
+  try { const raw = localStorage.getItem(slotKey(n)); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+
+function loadGame(n) {
+  const d = readSlot(n);
+  if (!d) return false;
+  resetState();
+  ['player', 'bg', 'insulin', 'carbs', 'time', 'score', 'narrative', 'companion', 'flags'].forEach(k => {
+    if (d[k]) state[k] = Object.assign(state[k], d[k]);
+  });
+  ['energy', 'confidence'].forEach(k => { if (typeof d[k] === 'number') state[k] = d[k]; });
+  state.bg.history = [];
+  if (!Array.isArray(state.score.bgSamples)) state.score.bgSamples = [];
+  // v2 saves stored insulin with a different shape; drop it rather than misread it.
+  if (!d.version || d.version < 3) { state.carbs.pending = []; state.insulin.pendingDoses = []; }
+  currentSlot = n;
+  return true;
+}
+
+function deleteSlot(n) { try { localStorage.removeItem(slotKey(n)); } catch (e) {} }
+
+// One-time move of the v0.1 single save into the first empty slot (never overwrites a slot).
+function migrateLegacySave() {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
-    return true;
-  } catch (e) { console.error('Save failed:', e); return false; }
+    const raw = localStorage.getItem(LEGACY_SAVE_KEY);
+    if (!raw) return;
+    for (let n = 1; n <= SLOT_COUNT; n++) {
+      if (!localStorage.getItem(slotKey(n))) {
+        localStorage.setItem(slotKey(n), raw);
+        localStorage.removeItem(LEGACY_SAVE_KEY);
+        return;
+      }
+    }
+  } catch (e) {}
 }
 
-function loadGame() {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return false;
-    const d = JSON.parse(raw);
-    if (!d || !d.version) return false;
-    Object.assign(state.player, d.player);
-    state.bg.current = d.bg.current;
-    state.bg.trend = d.bg.trend;
-    state.bg.unit = d.bg.unit || 'mmol';
-    state.bg.history = [];
-    state.energy = d.energy;
-    state.confidence = d.confidence;
-    Object.assign(state.time, d.time);
-    state.score.timeInRange = d.score.timeInRange || [];
-    state.score.collectiblesFound = d.score.collectiblesFound || [];
-    state.score.mealsManaged = d.score.mealsManaged || 0;
-    state.score.snacksRemembered = d.score.snacksRemembered || 0;
-    state.score.bgSamples = [];
-    state.narrative.eventsCompleted = d.narrative.eventsCompleted || [];
-    state.narrative.choices = d.narrative.choices || {};
-    Object.assign(state.companion, d.companion);
-    Object.assign(state.flags, d.flags);
-    // Clear pending carbs/insulin on load (stale data)
-    state.carbs.pending = [];
-    state.insulin.pendingDoses = [];
-    return true;
-  } catch (e) { console.error('Load failed:', e); return false; }
+// Resume a loaded game at the exact passage it was on.
+function resumeGame() {
+  showHUD();
+  const day = state.time.day;
+  if (state.flags.weekComplete) { renderPassage('weekly-summary'); return; }
+  const target = state.narrative.resumePassage;
+  if (day === 1 && state.time.week === 1) {
+    if (target && passages[target]) renderPassage(target, { skipOnEnter: true });
+    else renderPassage('day1-wakeup');
+  } else {
+    if (state.narrative.dayPicks && state.narrative.dayPicks.day === day) {
+      buildDay(day, state.narrative.dayPicks);
+      if (target && passages[target]) renderPassage(target, { skipOnEnter: true });
+      else renderPassage('d' + day + '-wakeup');
+    } else {
+      startDay(day);
+    }
+  }
+  showCompanion('Welcome back, ' + state.player.name + '!', 4000);
 }
 
-function hasSave() {
-  try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
-}
-
-function deleteSave() {
-  try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-}
-
-// ============================================
 // 10. EVENT POOL SYSTEM
 // ============================================
 
@@ -653,31 +943,52 @@ const socialPool = [];
 const emotionalPool = [];
 const practicalPool = [];
 
-function pickFromPool(pool, tier, count, seen) {
-  const eligible = pool.filter(e => e.tier <= tier && !seen.includes(e.id));
-  const shuffled = eligible.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+// Events that only make sense on a school day (Monday to Friday).
+const SCHOOL_ONLY = ['curious-classmate', 'show-tell', 'sub-teacher', 'playground-low', 'new-kid', 'school-supply', 'cafeteria-wildcard', 'school-lunch-line', 'bento-box'];
+
+function pickFromPool(pool, tier, count, seen, day) {
+  const eligible = pool.filter(e => e.tier <= tier && !seen.includes(e.id) && !(isWeekend(day) && SCHOOL_ONLY.includes(e.id)));
+  return shuffle(eligible).slice(0, count);
 }
 
-// --- MEAL EVENTS ---
+// Emoji for a food, by keyword. First match wins, so specific words come first.
+const FOOD_EMOJI = [
+  ['ice cream', '🍨'], ['sundae', '🍨'], ['hot dog', '🌭'], ['popcorn', '🍿'], ['pancake', '🥞'], ['waffle', '🧇'],
+  ['smoothie', '🥤'], ['fruit salad', '🍉'], ['berries', '🍓'], ['banana', '🍌'], ['apple', '🍎'], ['orange', '🍊'],
+  ['pizza', '🍕'], ['taco', '🌮'], ['burrito', '🌯'], ['wrap', '🌯'], ['roti', '🫓'], ['naan', '🫓'], ['pita', '🫓'], ['bannock', '🫓'],
+  ['sushi', '🍣'], ['dumpling', '🥟'], ['perogies', '🥟'], ['noodle', '🍜'], ['pho', '🍜'], ['soup', '🍲'], ['stew', '🍲'], ['chili', '🫘'],
+  ['curry', '🍛'], ['butter chicken', '🍛'], ['dal', '🍛'], ['biryani', '🍛'], ['rice', '🍚'], ['stir-fry', '🥢'],
+  ['pasta', '🍝'], ['spaghetti', '🍝'], ['mac', '🧀'], ['poutine', '🍟'], ['fries', '🍟'], ['fish', '🐟'], ['salmon', '🐟'],
+  ['burger', '🍔'], ['steak', '🥩'], ['turkey', '🦃'], ['chicken', '🍗'], ['pie', '🥧'], ['cake', '🎂'], ['muffin', '🧁'],
+  ['bagel', '🥯'], ['omelette', '🍳'], ['eggs', '🍳'], ['egg', '🍳'], ['oatmeal', '🥣'], ['oats', '🥣'], ['cereal', '🥣'], ['yogurt', '🥣'], ['parfait', '🥣'],
+  ['sandwich', '🥪'], ['pb&j', '🥪'], ['toast', '🍞'], ['bread', '🍞'], ['crackers', '🍘'], ['cheese', '🧀'], ['milk', '🥛'],
+  ['potato', '🥔'], ['salad', '🥗'], ['veggie', '🥦'], ['hummus', '🫘'], ['falafel', '🧆'], ['plate', '🍽️']
+];
+function foodEmoji(name) {
+  const n = name.toLowerCase();
+  for (const [k, e] of FOOD_EMOJI) if (n.includes(k)) return e;
+  return '🍽️';
+}
 
 function registerMealEvent(id, title, tier, options, betaId) {
   mealPool.push({
     id, title, type: 'meal', tier,
-    register: function(day, nextPassage) {
+    register: function(day, nextPassage, hour) {
       const p = 'd' + day + '-meal-' + id;
       addPassage(p, {
-        content: (s) => '<h2>' + title + '</h2>' +
-          // ART: Scene background — meal scene
+        content: (s) => sceneArt(options.foods.map(f => foodEmoji(f.name)).join(' '), [options.place || '🍽️']) +
+          '<h2>' + title + '</h2>' +
           '<p class="passage-scene">' + options.scene + '</p>' +
-          '<table class="meal-options">' + options.foods.map(f => '<tr><td><strong>' + f.name + '</strong></td><td>' + f.desc + ' <strong>~' + f.carbs + 'g carbs</strong></td></tr>').join('') + '</table>',
-        onEnter: () => { advanceTime(0.5); tick(0.5); showCompanion(options.companionIntro || "What looks good?"); },
+          '<div class="food-list">' + options.foods.map(f =>
+            '<div class="food-row"><span class="food-emoji">' + foodEmoji(f.name) + '</span><div><strong>' + f.name + '</strong> <span class="carb-tag">~' + f.carbs + 'g carbs</span><br><small>' + f.desc + '</small></div></div>'
+          ).join('') + '</div>',
+        onEnter: () => { if (hour) setClock(hour); else { advanceTime(0.5); tick(0.5); } showCompanion(options.companionIntro || 'What looks good?'); },
         choices: options.foods.map(f => ({
-          text: f.name + ' (~' + f.carbs + 'g)',
+          text: foodEmoji(f.name) + ' ' + f.name + ' <span class="carb-tag">~' + f.carbs + 'g</span>',
           onSelect: (s) => {
-            eatFood(f.carbs, f.speed || 'slow');
-            doseInsulin(recommendedDose(f.carbs, s.bg.current));
-            s.score.mealsManaged++;
+            s.narrative.lastMealCarbs = f.carbs;
+            s.narrative.wasHighBeforeMeal = s.bg.current > BGConfig.targetHigh;
+            eatMeal(f.carbs, f.speed || 'slow');
             tick(0.5); advanceTime(0.5);
           },
           next: p + '-done'
@@ -686,23 +997,23 @@ function registerMealEvent(id, title, tier, options, betaId) {
       addPassage(p + '-done', {
         content: (s) => {
           const zone = getBGZone(s.bg.current);
+          const take = s.player.device.insulin === 'pump' ? 'You tell your pump the carbs and it gives your mealtime insulin.' : 'You take your mealtime insulin with your pen, following your plan.';
           let resultText;
-          if (zone.zone === 'severe-low' || zone.zone === 'low') {
-            resultText = 'You finish eating, but something already feels off — your hands are trembly and the room seems far away. ' + s.companion.name + ' frowns at the meter.';
-          } else if (zone.zone === 'very-high') {
-            resultText = 'You eat and dose. The correction is on board, but the number is stubborn. ' + s.companion.name + (s.player.device.bgMonitor === 'cgm' ? ' watches the CGM.' : ' checks the meter.') + ' "Give it time."';
-          } else if (zone.zone === 'high') {
-            resultText = 'You eat and dose. BG is running a bit high — the correction should help. ' + s.companion.name + ': "We\'ll watch it."';
+          if (s.narrative.wasHighBeforeMeal) {
+            resultText = 'You were above 10 before eating, so your plan covered that too. ' + s.companion.name + ': "It will come down. Give it a couple of hours."';
+          } else if (zone.zone === 'high' || zone.zone === 'very-high') {
+            resultText = 'Your BG is going up while the food digests. ' + s.companion.name + ': "That\'s normal after a meal. The insulin is working on it."';
           } else {
-            resultText = options.result || 'You eat and dose. ' + s.companion.name + ' nods approvingly.';
+            resultText = options.result || (s.companion.name + ' gives you a thumbs up.');
           }
-          return '<p>' + resultText + '</p>' +
-            '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong> — ' + zone.label + '</p>';
+          return '<p>' + take + '</p><p>' + resultText + '</p>' +
+            '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + zone.label + '</p>';
         },
-        onEnter: () => {
+        onEnter: (s) => {
           tick(0.5); advanceTime(0.5);
           showCompanion(contextualCompanionLine('afterMealGood'));
-          if (betaId && collectBetaCell(betaId)) setTimeout(() => showBetaCellNotification(betaCellMap[betaId].name, betaCellMap[betaId].cat), 500);
+          if (s.narrative.wasHighBeforeMeal && collectBetaCell('correcting-high')) setTimeout(() => showBetaCellNotification(betaCellMap['correcting-high'].name, 'green'), 500);
+          else if (betaId && collectBetaCell(betaId)) setTimeout(() => showBetaCellNotification(betaCellMap[betaId].name, betaCellMap[betaId].cat), 500);
         },
         next: nextPassage, continueText: 'Continue'
       });
@@ -763,7 +1074,7 @@ registerMealEvent('fruit-salad', 'Fruit Salad Surprise', 1, {
 
 // Tier 2 meals
 registerMealEvent('birthday-pizza', 'Birthday Party Pizza', 2, {
-  scene: 'A friend\'s birthday party. Pizza, cake, soda. Everyone\'s eating freely.',
+  scene: 'A friend\'s birthday party. Pizza, cake, juice boxes. Everyone\'s eating.',
   companionIntro: "Social eating is hard. All approaches are valid here.",
   foods: [
     { name: 'Two slices of pizza', carbs: 60, desc: 'The full party experience.', speed: 'slow' },
@@ -851,7 +1162,7 @@ registerMealEvent('buffet', 'The Buffet', 3, {
   companionIntro: "Buffets are tricky. Portion control matters more than ever.",
   foods: [
     { name: 'Moderate plate', carbs: 45, desc: 'A reasonable selection. You resisted going back for seconds.', speed: 'slow' },
-    { name: 'Heavy plate', carbs: 70, desc: 'You loaded up. It happens. Dose accordingly.', speed: 'slow' },
+    { name: 'Heavy plate', carbs: 70, desc: 'You loaded up. It happens.', speed: 'slow' },
     { name: 'Protein-focused plate', carbs: 25, desc: 'Mostly meat and veggies, small portion of rice.', speed: 'slow' }
   ]
 });
@@ -901,9 +1212,9 @@ registerMealEvent('movie-snacks', 'Movie Theater', 2, {
   scene: 'The previews are starting. Someone hands you a shared bag of popcorn.',
   companionIntro: "Popcorn is sneaky \u2014 it looks like air but it\u2019s a lot of carbs.",
   foods: [
-    { name: 'Large popcorn + soda', carbs: 85, desc: 'Butter popcorn and a sugary drink. Lots of carbs.', speed: 'fast' },
-    { name: 'Medium popcorn + water', carbs: 45, desc: 'Skip the soda, go easier on the popcorn.', speed: 'fast' },
-    { name: 'Share popcorn + diet soda', carbs: 25, desc: 'Small portion, no added sugar in the drink.', speed: 'fast' }
+    { name: 'Large popcorn + pop', carbs: 85, desc: 'Butter popcorn and a sugary drink. Lots of carbs.', speed: 'fast' },
+    { name: 'Medium popcorn + water', carbs: 45, desc: 'Water instead of pop, and less popcorn.', speed: 'fast' },
+    { name: 'Share popcorn + water', carbs: 25, desc: 'A small portion to share.', speed: 'fast' }
   ]
 });
 
@@ -932,11 +1243,130 @@ registerMealEvent('thanksgiving', 'Thanksgiving Dinner', 3, {
   scene: 'A massive holiday meal. Turkey, stuffing, mashed potatoes, gravy, cranberry sauce, rolls, pie. All of it.',
   companionIntro: "Holiday meals are the hardest \u2014 lots of items, long meal, dessert later. Take it in pieces.",
   foods: [
-    { name: 'Full plate of everything + pie', carbs: 110, desc: 'The whole experience. Big dose needed.', speed: 'slow' },
-    { name: 'Moderate plate, pie for later', carbs: 65, desc: 'Split it up \u2014 dose for now, dose again for pie.', speed: 'slow' },
+    { name: 'Full plate of everything + pie', carbs: 110, desc: 'The whole experience.', speed: 'slow' },
+    { name: 'Moderate plate, pie for later', carbs: 65, desc: 'Save dessert for a bit later.', speed: 'slow' },
     { name: 'Protein-focused + small portions', carbs: 35, desc: 'Turkey and veggies mostly, small taste of the rest.', speed: 'slow' }
   ]
 }, 'restaurant-carbs');
+
+// --- v0.2 meals: more variety. Carb values are estimates (see HANDOFF: verify). ---
+registerMealEvent('bagel-morning', 'Bagel Morning', 1, {
+  scene: 'Kitchen. A bag of fresh bagels on the counter.',
+  place: '🏠 🌅',
+  companionIntro: 'Bagels are bigger than they look. One bagel is a lot of bread.',
+  foods: [
+    { name: 'Whole bagel with cream cheese', carbs: 50, desc: 'A full bagel. Dense and filling.', speed: 'slow' },
+    { name: 'Half a bagel + egg', carbs: 25, desc: 'Half the bread, plus protein from the egg.', speed: 'slow' },
+    { name: 'English muffin + seed butter', carbs: 28, desc: 'A smaller bread with sunflower seed butter.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('oatmeal-bar', 'Oatmeal Bar', 1, {
+  scene: 'A pot of oatmeal and a row of toppings.',
+  place: '🏠 🌅',
+  companionIntro: 'Oatmeal is a slow carb. The toppings change the total.',
+  foods: [
+    { name: 'Oatmeal with raisins and brown sugar', carbs: 45, desc: 'Sweet and cozy. Dried fruit adds up.', speed: 'slow' },
+    { name: 'Oatmeal with berries and milk', carbs: 35, desc: 'Fresh fruit and a splash of milk.', speed: 'slow' },
+    { name: 'Small oatmeal with nuts and cinnamon', carbs: 22, desc: 'Smaller bowl, crunchy topping.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('breakfast-wrap', 'Breakfast Wraps', 1, {
+  scene: 'Someone is making breakfast wraps to go.',
+  place: '🏠 🌅',
+  foods: [
+    { name: 'Egg and cheese wrap', carbs: 25, desc: 'One tortilla, eggs and cheese.', speed: 'slow' },
+    { name: 'Breakfast burrito with potatoes', carbs: 45, desc: 'Eggs, beans and potatoes in a big tortilla.', speed: 'slow' },
+    { name: 'Fruit cup + plain yogurt', carbs: 30, desc: 'No wrap. Just fruit and yogurt.', speed: 'fast' }
+  ]
+});
+
+registerMealEvent('pita-lunch', 'Pita Lunch', 1, {
+  scene: 'Lunch. A plate of pita, hummus, veggies and falafel.',
+  place: '🏫 🍽️',
+  foods: [
+    { name: 'Falafel wrap in pita', carbs: 50, desc: 'Falafel, veggies and sauce in a big pita.', speed: 'slow' },
+    { name: 'Half pita + hummus + veggies', carbs: 25, desc: 'Dip and crunch.', speed: 'slow' },
+    { name: 'Greek salad with chicken', carbs: 10, desc: 'Lettuce, cucumber, tomato, feta and chicken.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('dumplings', 'Dumpling Night', 1, {
+  scene: 'Steaming baskets of dumplings at dinner.',
+  place: '🏠 🌆',
+  companionIntro: 'Dumpling wrappers are dough, so they carry the carbs. Count the dumplings!',
+  foods: [
+    { name: '8 dumplings + fried rice', carbs: 70, desc: 'A big dinner. The rice adds a lot.', speed: 'slow' },
+    { name: '8 dumplings', carbs: 40, desc: 'Just the dumplings with dipping sauce.', speed: 'slow' },
+    { name: '4 dumplings + veggie soup', carbs: 25, desc: 'Fewer dumplings and a light soup.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('bento-box', 'Bento Box Lunch', 2, {
+  scene: 'Your lunch box has little sections for each food.',
+  place: '🏫 🍱',
+  foods: [
+    { name: 'Rice + teriyaki salmon', carbs: 50, desc: 'A cup of rice and salmon. Teriyaki sauce is sweet too.', speed: 'slow' },
+    { name: 'Sushi rolls (6 pieces)', carbs: 35, desc: 'Sushi rice is a carb, even in little rolls.', speed: 'slow' },
+    { name: 'Noodle soup thermos', carbs: 40, desc: 'Warm noodles in broth.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('chili-pot', 'Big Pot of Chili', 2, {
+  scene: 'A pot of chili has been cooking all afternoon.',
+  place: '🏠 🌆',
+  companionIntro: 'Beans have carbs AND fibre. They are a slow, steady carb.',
+  foods: [
+    { name: 'Chili + cornbread', carbs: 55, desc: 'A bowl of chili with a square of cornbread.', speed: 'slow' },
+    { name: 'Chili over rice', carbs: 60, desc: 'Chili poured over a cup of rice.', speed: 'slow' },
+    { name: 'Bowl of chili', carbs: 30, desc: 'Just the chili, extra cheese on top.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('roti-dinner', 'Roti and Curry', 2, {
+  scene: 'Dinner at a friend\'s house. Their family made roti and curry.',
+  place: '🏡 🌆',
+  companionIntro: 'Roti is the bread here. Dal and chickpeas have carbs too.',
+  foods: [
+    { name: 'Two roti + chickpea curry', carbs: 65, desc: 'Two pieces of roti and a bowl of chana.', speed: 'slow' },
+    { name: 'One roti + chicken curry', carbs: 35, desc: 'One roti and curry with chicken.', speed: 'slow' },
+    { name: 'Dal + rice', carbs: 55, desc: 'Lentil curry with a cup of rice.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('potluck', 'Community Potluck', 2, {
+  scene: 'A community potluck. Long tables, lots of families, food from everywhere.',
+  place: '🏛️ 🍽️',
+  companionIntro: 'Potlucks are a carb-counting puzzle. Take a little of a few things.',
+  foods: [
+    { name: 'Stew + a piece of bannock', carbs: 45, desc: 'Hearty stew and a warm piece of bannock.', speed: 'slow' },
+    { name: 'Wild rice salad + turkey', carbs: 30, desc: 'A scoop of wild rice salad and sliced turkey.', speed: 'slow' },
+    { name: 'A bit of everything', carbs: 60, desc: 'A small scoop of every dish. Hard to count!', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('hockey-poutine', 'Hockey Game Snack Bar', 3, {
+  scene: 'Weekend hockey game at the arena. The snack bar smells amazing.',
+  place: '🏒 🥅',
+  companionIntro: 'Fries soak up gravy and cheese curds. The fries are where the carbs are.',
+  foods: [
+    { name: 'Large poutine', carbs: 75, desc: 'Fries, gravy, cheese curds. A big bowl.', speed: 'slow' },
+    { name: 'Small poutine', carbs: 40, desc: 'The kid-size bowl.', speed: 'slow' },
+    { name: 'Hot dog + water', carbs: 25, desc: 'One hot dog in a bun.', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('pho-shop', 'Noodle Soup Restaurant', 3, {
+  scene: 'A busy restaurant. Giant bowls of noodle soup go by.',
+  place: '🍜 🏙️',
+  companionIntro: 'The noodles are the carbs. The broth has almost none.',
+  foods: [
+    { name: 'Large bowl of pho', carbs: 70, desc: 'A huge bowl. Lots of rice noodles.', speed: 'slow' },
+    { name: 'Small bowl of pho', carbs: 40, desc: 'The smaller size.', speed: 'slow' },
+    { name: 'Fresh rolls + small soup', carbs: 35, desc: 'Two fresh rolls and a cup of broth with a few noodles.', speed: 'slow' }
+  ]
+});
 
 // --- SOCIAL EVENTS ---
 
@@ -979,7 +1409,7 @@ function registerSocialEvent(id, title, tier, scene, dialogueChoices, betaId) {
 registerSocialEvent('curious-classmate', 'The Curious Classmate', 1,
   'A classmate notices you checking your BG. "Hey, what are you doing? Does that hurt?"',
   [
-    { id: 'explain', text: '"I\'m checking my blood sugar. I have Type 1 Diabetes."', conf: 5, response: 'They listen carefully. "That\'s a lot to deal with. You\'re kind of badass."', companionSays: 'Honest and direct. Well done.' },
+    { id: 'explain', text: '"I\'m checking my blood sugar. I have Type 1 Diabetes."', conf: 5, response: 'They listen carefully. "That\'s a lot to deal with. You\'re kind of amazing."', companionSays: 'Honest and direct. Well done.' },
     { id: 'casual', text: '"Just a quick health check. No big deal."', conf: 3, response: 'They nod. "Oh cool, okay." And go back to what they were doing.', companionSays: 'Short and simple. Works perfectly.' },
     { id: 'deflect', text: '"It\'s a thing. Don\'t worry about it."', conf: 3, response: 'They shrug. "Okay!" No awkwardness at all.', companionSays: 'You don\'t owe anyone an explanation.' }
   ]
@@ -1026,7 +1456,7 @@ registerSocialEvent('sleepover', 'The Sleepover Dilemma', 2,
   [
     { id: 'prepared', text: 'Tell the parents in advance and pack everything you need', conf: 5, response: 'The host\'s parents are great about it. They even ask what snacks to have on hand. The sleepover goes smoothly.', companionSays: 'Preparation is power. And you still had a great time.' },
     { id: 'wing-it', text: 'Pack your supplies but don\'t mention it unless necessary', conf: 3, response: 'It works out, but you have to explain at midnight when you need to check your BG. A little awkward, but your friend is cool about it.', companionSays: 'It worked, but next time a heads-up might make things easier.' },
-    { id: 'skip', text: 'Decide to skip it this time', conf: 3, response: 'You stay home. It\'s a valid choice, but you wonder if you would have been fine.', companionSays: 'Sometimes you\'re not ready, and that\'s okay. There\'ll be more sleepovers.' }
+    { id: 'skip', text: 'Decide to skip it this time', conf: 3, response: 'You stay home tonight.', companionSays: 'Sometimes you\'re not ready, and that\'s okay. There\'ll be more sleepovers.' }
   ], 'packing-trip'
 );
 
@@ -1035,16 +1465,16 @@ registerSocialEvent('sub-teacher', 'The Substitute Teacher', 2,
   [
     { id: 'explain', text: '"I have Type 1 Diabetes. I need to eat when my blood sugar is low. I have a medical note."', conf: 5, response: 'The sub looks uncertain but backs down. "Oh. Okay, carry on." Later, your regular teacher confirms everything is fine.', companionSays: 'That took courage. Speaking up for yourself when someone pushes back — that\'s a real skill.' },
     { id: 'nurse', text: '"Can I go to the nurse? They can explain."', conf: 5, response: 'The nurse handles it. The sub apologizes later. "I had no idea. Sorry about that."', companionSays: 'Smart move. Let the system work for you.' },
-    { id: 'comply', text: 'Put the snack away (and feel frustrated)', conf: 3, response: 'You put it away, but your BG drops. You raise your hand to go to the nurse. It works out, but it shouldn\'t have been this hard.', companionSays: 'That wasn\'t fair. But you handled it — and next time you\'ll know what to say.' }
+    { id: 'comply', text: 'Put the snack away', conf: 3, response: 'You put it away, but your BG drops. You raise your hand to go to the nurse. It works out, but it shouldn\'t have been this hard.', companionSays: 'That wasn\'t fair. But you handled it — and next time you\'ll know what to say.' }
   ]
 );
 
 registerSocialEvent('left-out', 'Feeling Left Out', 2,
   'Your friends are planning a big hike. You\'re anxious about managing BG during hours of walking with no shade and limited food options.',
   [
-    { id: 'go-prepared', text: 'Go, but prepare carefully — extra snacks, reduced insulin, frequent checks', conf: 5, response: 'The hike goes great. You stop once for a snack, and nobody minds. You feel proud for not letting T1D stop you.', companionSays: 'You faced the fear AND had a good time. That\'s the whole game right there.' },
+    { id: 'go-prepared', text: 'Go, but prepare: extra snacks, fast sugar, and more BG checks', conf: 5, response: 'The hike goes great. You stop once for a snack, and nobody minds. You made it to the top.', companionSays: 'You faced the fear AND had a good time. That\'s the whole game right there.' },
     { id: 'modify', text: 'Suggest a shorter hike that works for everyone', conf: 5, response: 'Your friends are totally fine with a shorter route. Turns out, a couple of them were nervous about the long one too.', companionSays: 'Advocating for what you need often helps everyone.' },
-    { id: 'skip', text: 'Sit this one out', conf: 3, response: 'You stay home. It\'s okay, but you feel a little down about it.', companionSays: 'Missing out is hard. But not every outing has to be yours.' }
+    { id: 'skip', text: 'Sit this one out', conf: 3, response: 'You stay home this time.', companionSays: 'Missing out is hard. But not every outing has to be yours.' }
   ], 'adjusting-exercise'
 );
 
@@ -1081,7 +1511,7 @@ registerSocialEvent('social-media', 'The Social Media Moment', 3,
   [
     { id: 'confront', text: 'Ask them to take it down. "That\'s my medical stuff. It\'s not funny."', conf: 5, response: 'They take it down. "Oh, sorry. I didn\'t think about it like that." Maybe they actually learned something.', companionSays: 'You stood up for yourself. That post is gone and they\'ll think twice next time.' },
     { id: 'adult', text: 'Tell a trusted adult.', conf: 5, response: 'The adult handles it. The post comes down. You get an apology.', companionSays: 'Getting help isn\'t tattling. It\'s problem-solving.' },
-    { id: 'let-go', text: 'Let it go. You know it wasn\'t meant to be cruel.', conf: 3, response: 'You move on. It stings a little, but you know who you are.', companionSays: 'Your call. Just know it\'s always okay to speak up if something bothers you.' }
+    { id: 'let-go', text: 'Let it go. You know it wasn\'t meant to be cruel.', conf: 3, response: 'You move on.', companionSays: 'Your call. Just know it\'s always okay to speak up if something bothers you.' }
   ]
 );
 
@@ -1097,9 +1527,9 @@ registerSocialEvent('skeptic', 'The Skeptic', 3,
 registerSocialEvent('birthday-invite', 'The Birthday Invite', 1,
   'A friend hands you a birthday party invitation. "There will be cake! Is that okay for you?"',
   [
-    { id: 'yes-cake', text: '"Yeah, I can eat cake \u2014 I just dose insulin for it."', conf: 5, response: 'Their eyes widen. "Oh, cool! I didn\'t know that." They look relieved.', companionSays: 'Now they know \u2014 no food is off limits, you just plan for it.' },
+    { id: 'yes-cake', text: '"Yeah, I can eat cake \u2014 I just plan for it with my insulin."', conf: 5, response: 'Their eyes widen. "Oh, cool! I didn\'t know that." They look relieved.', companionSays: 'Now they know \u2014 no food is off limits, you just plan for it.' },
     { id: 'thanks-ask', text: '"Thanks for thinking of me. I\'ll be there."', conf: 4, response: 'They smile. "Can\'t wait!"', companionSays: 'Simple. Warm. You didn\'t have to explain anything unless you wanted to.' },
-    { id: 'ask-menu', text: '"What food will be there? I just like to know ahead."', conf: 3, response: 'They list it off. You mentally add up the likely carbs. Pizza, cake, soda, chips.', companionSays: 'Smart \u2014 knowing the menu ahead of time is a real advantage.' }
+    { id: 'ask-menu', text: '"What food will be there? I just like to know ahead."', conf: 3, response: 'They list it off. You mentally add up the likely carbs. Pizza, cake, chips.', companionSays: 'Smart \u2014 knowing the menu ahead of time is a real advantage.' }
   ], 'talking-to-friends'
 );
 
@@ -1156,7 +1586,7 @@ registerEmotionalEvent('frustration', 'The Frustration', 1,
   'Your BG went high even though you did everything right. The number stares back at you from the screen.',
   [
     { id: 'vent', text: '"This isn\'t fair."', conf: 3, response: 'You stare at the number. It doesn\'t change. But saying it out loud helps a little.', companionSays: 'Yeah. It isn\'t fair. And it\'s okay to be mad about it.' },
-    { id: 'fix', text: 'Take a breath and give a correction dose.', conf: 5, response: 'You correct and move on. The number will come down. You know what to do.', companionSays: 'That\'s resilience right there. Feel it AND fix it.' },
+    { id: 'fix', text: 'Take a breath and follow my plan for highs.', conf: 5, response: 'You follow your plan and move on. The number will come down. You know what to do.', companionSays: 'That\'s resilience right there. Feel it AND fix it.' },
     { id: 'shrug', text: '"Whatever. It\'ll come down."', conf: 3, response: 'You shrug it off. Some battles aren\'t worth the emotional energy.', companionSays: 'Sometimes that\'s the right move. Not every high needs a feelings conversation.' }
   ], 'not-your-numbers'
 );
@@ -1172,7 +1602,7 @@ registerEmotionalEvent('small-win', 'The Small Win', 1,
 registerEmotionalEvent('missing-normal', 'Missing Normal', 2,
   'A quiet moment. You watch your friends eating without thinking, running without checking, living without counting. You remember what that felt like.',
   [
-    { id: 'feel', text: 'Let yourself feel it.', conf: 3, response: 'The sadness washes over you. It\'s real. You sit with it for a moment, and then it passes — not gone, but manageable.', companionSays: 'I\'m not going to tell you to look on the bright side. This is a real loss, and you\'re allowed to grieve it.' },
+    { id: 'feel', text: 'Let yourself feel it.', conf: 3, response: 'You sit with it for a moment. Then the moment passes.', companionSays: 'I\'m not going to tell you to look on the bright side. This is a real loss, and you\'re allowed to grieve it.' },
     { id: 'reframe', text: '"I can still do everything they do. I just do it differently."', conf: 5, response: 'You watch them again. You\'re doing the same things — eating, running, living. Just with extra steps.', companionSays: 'Different, not less. That\'s the truth.' },
     { id: 'distract', text: 'Push the feeling aside and focus on something else.', conf: 3, response: 'You redirect your attention. The feeling will come back sometime, but right now you\'re okay.', companionSays: 'There\'s no right way to handle this. Whatever gets you through the moment.' }
   ], 'feelings-valid'
@@ -1187,7 +1617,7 @@ registerEmotionalEvent('bad-day', 'The Bad Day', 2,
 );
 
 registerEmotionalEvent('burnout', 'Burnout', 3,
-  'You are so tired. Tired of checking. Tired of counting. Tired of this being your life every single day. You want to skip everything just for one day.',
+  'Checking. Counting. Every single day. Today you notice just how much of it there is.',
   [
     { id: 'vent', text: 'Tell someone how you\'re feeling.', conf: 5, response: 'You talk to someone you trust. They listen. They don\'t try to fix it — they just hear you. It helps more than you expected.', companionSays: 'Burnout is real, it\'s normal, and talking about it is the first step. You\'re not alone in this.' },
     { id: 'skip', text: 'Skip a check. Just this once.', conf: 0, response: 'You skip one check. The world doesn\'t end. But the BG drifts a bit without you noticing. Tomorrow, you get back to it.', companionSays: 'I get it. Just... come back to it when you\'re ready. The routine is there when you need it.' },
@@ -1198,8 +1628,8 @@ registerEmotionalEvent('burnout', 'Burnout', 3,
 registerEmotionalEvent('pride', 'Pride', 3,
   'End of a really tough day. Multiple curveballs. But you managed every single one. Your BG is in range. Your energy is good. You did this.',
   [
-    { id: 'own-it', text: 'Let yourself feel proud.', conf: 10, response: 'You sit with the feeling. Not arrogance — just quiet, earned pride. You did a hard thing, and you did it well.', companionSays: 'You handled that whole day. No help needed. That\'s real.' },
-    { id: 'share', text: 'Tell someone about your day.', conf: 8, response: 'You share the highlights. They might not fully understand, but they can see it in your face — you\'re proud of yourself.', companionSays: 'Share the wins. People want to celebrate with you.' }
+    { id: 'own-it', text: 'Let yourself feel proud.', conf: 10, response: 'You sit with the feeling for a moment. You did a hard thing.', companionSays: 'You handled that whole day. No help needed. That\'s real.' },
+    { id: 'share', text: 'Tell someone about your day.', conf: 8, response: 'You share the highlights. They might not fully understand, but they can tell it was a big day.', companionSays: 'Share the wins. People want to celebrate with you.' }
   ]
 );
 
@@ -1386,42 +1816,41 @@ registerPracticalEvent('school-supply', 'School Nurse Supply Drop', 1,
 // ============================================
 // 11. MINI-GAME FRAMEWORK + IMPLEMENTATIONS
 // ============================================
+// Every mini-game: a start screen that explains it, no timers on learning games,
+// answers can be changed until they're right, and the finish is always encouraging.
+// Stars are kept internally (they nudge Confidence) but never shown.
 
 const miniGameSchedule = {
-  2: { am: { name: 'Label Reader',      desc: 'Read a Canadian Nutrition Facts label. No rush. Accuracy is everything.' },
-       pm: { name: 'Exercise Balance',   desc: 'Keep exercising, but watch your BG. Pause to snack when you need to.' } },
-  3: { am: { name: 'Dose Calculator',   desc: 'Think through the steps of figuring out your mealtime insulin dose.' },
-       pm: { name: 'Pack Your Bag',     desc: 'Heading to school. Pack everything you need for a day out.' } },
-  4: { am: { name: 'Carb Counter',      desc: 'Restaurant-style plate. No labels, just instinct.' },
-       pm: { name: 'Glucose Roller',    desc: 'Keep the ball in the green zone. Feel how BG has momentum.' } },
-  5: { am: { name: 'Portion Estimator', desc: 'Look at the plate and estimate the total carbs. Your eyes are your tools.' },
-       pm: { name: 'Sick Day Protocol', desc: 'You\'re sick and BG is high. Step through the protocol correctly.' } },
-  6: { am: { name: 'Label Reader',      desc: 'Trickier label. More questions. Take your time.' },
-       pm: { name: 'Pack Your Bag',     desc: 'Going on a trip. More supplies, more to remember.' } },
-  7: { am: { name: 'Dose Calculator',   desc: 'Tricky scenario: estimation, fat content, and knowing when to wait.' },
-       pm: { name: 'Exercise Balance',  desc: 'Sports tournament. Longer session, harder to stay in range.' } }
+  1: { am: { name: 'Carb Counter',      desc: 'Add up the carbs on a plate.' },
+       pm: { name: 'Exercise Balance',  desc: 'Gym class! Keep your BG in the green while you move.' } },
+  2: { am: { name: 'Label Reader',      desc: 'Read a Canadian Nutrition Facts label. Take your time.' },
+       pm: { name: 'Carb Counter',      desc: 'A new plate to count.' } },
+  3: { am: { name: 'Mealtime Routine',  desc: 'Walk through the steps you follow at every meal.' },
+       pm: { name: 'Pack Your Bag',     desc: 'Pack everything you need for a day at school.' } },
+  4: { am: { name: 'Portion Estimator', desc: 'Look at the plate and estimate the carbs.' },
+       pm: { name: 'Glucose Roller',    desc: 'Keep the ball in the green zone. See how BG has momentum.' } },
+  5: { am: { name: 'Label Reader',      desc: 'Crackers and soup are about all you can manage. Read the labels.' },
+       pm: { name: 'Sick Day Protocol', desc: 'Step through what to do on a sick day.' } },
+  6: { am: { name: 'Pack Your Bag',     desc: 'Pack for a Saturday out with friends.' },
+       pm: { name: 'Exercise Balance',  desc: 'A long bike ride. Keep your BG in the green.' } },
+  7: { am: { name: 'Mealtime Routine',  desc: 'Tricky meals: estimating, fatty foods, and knowing when to wait.' },
+       pm: { name: 'Glucose Roller',    desc: 'One more roll. See if it feels easier now.' } }
 };
 
-// Mini-game Beta Cells (awarded on first play of each game type)
 const miniGameBetaCells = {
-  'Carb Counter':    'carbs-everywhere',
-  'Dose Calculator': 'what-is-bolus',
-  'Treat-the-Low':   'fifteen-fifteen-rule',
-  'Label Reader':    'reading-labels',
-  'Exercise Balance':'adjusting-exercise',
-  'Pack Your Bag':   'packing-trip',
-  'Glucose Roller':  'what-is-basal',
+  'Carb Counter':     'carbs-everywhere',
+  'Mealtime Routine': 'what-is-bolus',
+  'Treat-the-Low':    'fifteen-fifteen-rule',
+  'Label Reader':     'reading-labels',
+  'Exercise Balance': 'adjusting-exercise',
+  'Pack Your Bag':    'packing-trip',
+  'Glucose Roller':   'what-is-basal',
   'Portion Estimator':'portion-estimation',
   'Sick Day Protocol':'sick-day-management'
 };
 
-// ---- Generic framework ----
-// Each mini-game exposes: play(opts, onComplete)
-// opts: { tier, currentBG, carbsActual?, ... }
-// onComplete({ stars: 0-3, summary: string })
 const MiniGames = {};
 
-// Render a panel inside the passage container (reuses the narrative area)
 function renderMGPanel(innerHtml) {
   const container = document.getElementById('passage-container');
   container.innerHTML = '';
@@ -1433,7 +1862,6 @@ function renderMGPanel(innerHtml) {
   return div;
 }
 
-// Star rating from difference: [perfect, good, ok]
 function starsFromDiff(diff, thresholds) {
   if (diff <= thresholds[0]) return 3;
   if (diff <= thresholds[1]) return 2;
@@ -1441,111 +1869,101 @@ function starsFromDiff(diff, thresholds) {
   return 0;
 }
 
+// Encouraging finish box with a Continue button.
+function mgFinish(message, onContinue, emoji) {
+  const resDiv = document.getElementById('mg-result');
+  resDiv.className = 'mg-result good';
+  resDiv.innerHTML = '<div class="mg-finish-emoji">' + (emoji || '🎉') + '</div>' + message +
+    '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
+  document.getElementById('mg-continue').addEventListener('click', onContinue);
+  resDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Step-by-step question game used by Mealtime Routine and Sick Day Protocol.
+function runSteps(panelTitle, subtitle, steps, finishMsg, onComplete) {
+  let i = 0, firstTry = 0;
+  function show() {
+    const st = steps[i];
+    renderMGPanel('<h2>' + panelTitle + '</h2><p class="mg-subtitle">' + subtitle + '</p>' +
+      '<div class="step-dots">' + steps.map((_, k) => '<span class="' + (k < i ? 'done' : k === i ? 'now' : '') + '"></span>').join('') + '</div>' +
+      (st.art ? sceneArt(st.art, [], 'day') : '') +
+      '<div class="step-card"><p>' + st.situation + '</p><p><strong>' + st.q + '</strong></p></div>' +
+      '<div id="mg-step-quiz"></div>' +
+      '<div style="margin-top:12px;display:none;" id="mg-next-wrap"><button class="mg-action-btn" id="mg-next">' + (i < steps.length - 1 ? 'Next step ▶' : 'Finish ▶') + '</button></div>' +
+      '<div id="mg-result"></div>');
+    let tried = false;
+    choiceQuiz(document.getElementById('mg-step-quiz'), shuffle(st.choices), (ok) => {
+      if (ok && !tried) firstTry++;
+      if (!ok) tried = true;
+      document.getElementById('mg-next-wrap').style.display = ok ? '' : 'none';
+    });
+    document.getElementById('mg-next').addEventListener('click', () => {
+      i++;
+      if (i < steps.length) { show(); return; }
+      renderMGPanel('<h2>' + panelTitle + '</h2><div id="mg-result"></div>');
+      mgFinish(finishMsg, () => onComplete({ stars: firstTry === steps.length ? 3 : firstTry >= steps.length - 1 ? 2 : 1, summary: finishMsg }));
+    });
+  }
+  show();
+}
+
 // ---- Carb Counter ----
-// Show N foods, player enters total estimated carbs.
 MiniGames['Carb Counter'] = {
+  intro: { emoji: '🥪', how: [
+    'You\'ll see a plate of food with portion sizes.',
+    'Add up the carbs and type your total. Use the reference chart if you like.',
+    'There\'s no timer. Close is great: carb counting is always an estimate.'] },
   play: function(opts, onComplete) {
-    // AUDIO: Play mini-game start jingle
     const tier = opts.tier || 1;
-    // Canada Food Guide–aligned basic foods with portion sizes
     const pool = [
-      { emoji: '🍎', name: 'Apple',         portion: '1 medium',      carbs: 19 },
-      { emoji: '🍌', name: 'Banana',        portion: '1 medium',      carbs: 27 },
-      { emoji: '🥛', name: 'Milk',          portion: '250 mL',        carbs: 13 },
-      { emoji: '🥯', name: 'Bagel',         portion: '1 plain',       carbs: 48 },
-      { emoji: '🍞', name: 'Bread',         portion: '1 slice',       carbs: 15 },
-      { emoji: '🍚', name: 'White rice',    portion: '1/2 cup cooked',carbs: 22 },
-      { emoji: '🍝', name: 'Pasta',         portion: '1 cup cooked',  carbs: 40 },
-      { emoji: '🥔', name: 'Potato',        portion: '1 medium',      carbs: 26 },
-      { emoji: '🥕', name: 'Carrots',       portion: '1 cup',         carbs: 12 },
-      { emoji: '🧀', name: 'Cheddar',       portion: '1 slice',       carbs: 1  },
-      { emoji: '🥜', name: 'Peanut butter', portion: '2 tbsp',        carbs: 6  },
-      { emoji: '🥚', name: 'Eggs',          portion: '2 large',       carbs: 1  },
-      { emoji: '🍇', name: 'Grapes',        portion: '1 cup',         carbs: 16 },
-      { emoji: '🍓', name: 'Strawberries',  portion: '1 cup',         carbs: 11 },
-      { emoji: '🥣', name: 'Oatmeal',       portion: '1/2 cup cooked',carbs: 14 },
-      { emoji: '🥨', name: 'Pretzels',      portion: '1 oz',          carbs: 23 },
-      { emoji: '🍪', name: 'Cookies',       portion: '2 small',       carbs: 20 },
-      { emoji: '🥤', name: 'Juice',         portion: '250 mL',        carbs: 28 },
-      { emoji: '🌮', name: 'Corn tortilla', portion: '1 small',       carbs: 12 },
-      { emoji: '🥦', name: 'Broccoli',      portion: '1 cup',         carbs: 6  }
+      { emoji: '🍎', name: 'Apple', portion: '1 medium', carbs: 19 },
+      { emoji: '🍌', name: 'Banana', portion: '1 medium', carbs: 27 },
+      { emoji: '🥛', name: 'Milk', portion: '250 mL', carbs: 13 },
+      { emoji: '🥯', name: 'Bagel', portion: '1 plain', carbs: 48 },
+      { emoji: '🍞', name: 'Bread', portion: '1 slice', carbs: 15 },
+      { emoji: '🍚', name: 'White rice', portion: '1/2 cup cooked', carbs: 22 },
+      { emoji: '🍝', name: 'Pasta', portion: '1 cup cooked', carbs: 40 },
+      { emoji: '🥔', name: 'Potato', portion: '1 medium', carbs: 26 },
+      { emoji: '🥕', name: 'Carrots', portion: '1 cup', carbs: 12 },
+      { emoji: '🧀', name: 'Cheddar', portion: '1 slice', carbs: 1 },
+      { emoji: '🥚', name: 'Eggs', portion: '2 large', carbs: 1 },
+      { emoji: '🍇', name: 'Grapes', portion: '1 cup', carbs: 16 },
+      { emoji: '🍓', name: 'Strawberries', portion: '1 cup', carbs: 11 },
+      { emoji: '🥣', name: 'Oatmeal', portion: '1/2 cup cooked', carbs: 14 },
+      { emoji: '🥨', name: 'Pretzels', portion: '1 small bag', carbs: 23 },
+      { emoji: '🍪', name: 'Cookies', portion: '2 small', carbs: 20 },
+      { emoji: '🌮', name: 'Corn tortilla', portion: '1 small', carbs: 12 },
+      { emoji: '🥦', name: 'Broccoli', portion: '1 cup', carbs: 6 },
+      { emoji: '🫘', name: 'Black beans', portion: '1/2 cup', carbs: 20 },
+      { emoji: '🍐', name: 'Pear', portion: '1 small', carbs: 22 },
+      { emoji: '🧇', name: 'Waffle', portion: '1 frozen', carbs: 15 }
     ];
     const n = tier === 1 ? 3 : tier === 2 ? 4 : 5;
-    const shuffled = pool.slice().sort(() => Math.random() - 0.5).slice(0, n);
-    const total = shuffled.reduce((sum, f) => sum + f.carbs, 0);
-
+    const foods = shuffle(pool).slice(0, n);
+    const total = foods.reduce((sum, f) => sum + f.carbs, 0);
     renderMGPanel(
       '<h2>🥪 Carb Counter</h2>' +
       '<p class="mg-subtitle">Add up the total carbs on your plate.</p>' +
-      '<details class="mg-legend" open>' +
-        '<summary><strong>📖 Portion size reference</strong> — rough gram ranges you can memorize</summary>' +
-        '<div class="mg-legend-grid">' +
-          '<div><strong>🍎 Fruit</strong><br>' +
-            '• Small (berries, ½ banana) ~10g<br>' +
-            '• Medium (apple, orange) ~15–20g<br>' +
-            '• Large (big banana, mango) ~25–30g</div>' +
-          '<div><strong>🍞 Grains &amp; starches</strong><br>' +
-            '• 1 slice bread ~15g<br>' +
-            '• ½ cup rice / pasta / potato ~20–22g<br>' +
-            '• 1 cup rice / pasta ~40–45g<br>' +
-            '• 1 bagel ~45–50g</div>' +
-          '<div><strong>🥛 Dairy</strong><br>' +
-            '• 1 cup milk ~12g<br>' +
-            '• ¾ cup plain yogurt ~12g<br>' +
-            '• ¾ cup flavoured yogurt ~20–30g<br>' +
-            '• Cheese ~0–1g</div>' +
-          '<div><strong>🥦 Non-starchy veg</strong><br>' +
-            '• 1 cup raw ~5g<br>' +
-            '• 1 cup cooked ~10g<br>' +
-            '• Leafy greens ~free</div>' +
-          '<div><strong>🥜 Protein &amp; fats</strong><br>' +
-            '• Meat, eggs, fish ~0g<br>' +
-            '• Nuts &amp; nut butter ~5–8g per 2 tbsp<br>' +
-            '• Beans/lentils ~20g per cup</div>' +
-          '<div><strong>🍪 Sweets &amp; drinks</strong><br>' +
-            '• 1 small cookie ~8–10g<br>' +
-            '• Juice box (250 mL) ~25–30g<br>' +
-            '• Regular pop (can) ~35–40g</div>' +
-        '</div>' +
-      '</details>' +
-      shuffled.map(f =>
-        '<div class="mg-food-row">' +
-          '<div><span class="mg-food-emoji">' + f.emoji + '</span>' +
-          '<span class="mg-food-name">' + f.name + '</span></div>' +
-          '<span class="mg-food-portion">' + f.portion + '</span>' +
-        '</div>'
-      ).join('') +
-      '<div class="mg-estimate-row">' +
-        '<label>Total carbs:</label>' +
-        '<input type="number" id="mg-carb-input" placeholder="0" min="0" max="300">' +
-        '<span>g</span>' +
-        '<button class="mg-action-btn" id="mg-submit">Check</button>' +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
-
+      '<div class="plate">' + foods.map(f => '<span title="' + f.name + '">' + f.emoji + '</span>').join('') + '</div>' +
+      foods.map(f => '<div class="mg-food-row"><div><span class="mg-food-emoji">' + f.emoji + '</span><span class="mg-food-name">' + f.name + '</span></div><span class="mg-food-portion">' + f.portion + '</span></div>').join('') +
+      '<details class="mg-legend"><summary><strong>📖 Carb reference</strong> (tap to open)</summary><div class="mg-legend-grid">' +
+        '<div><strong>🍎 Fruit</strong><br>Small (berries, ½ banana) ~10g<br>Medium (apple, orange) ~15-20g<br>Large (big banana) ~25-30g</div>' +
+        '<div><strong>🍞 Grains</strong><br>1 slice bread ~15g<br>½ cup rice / pasta ~20g<br>1 cup rice / pasta ~40-45g<br>1 bagel ~45-50g</div>' +
+        '<div><strong>🥛 Milk</strong><br>1 cup milk ~12-13g<br>Cheese ~0-1g</div>' +
+        '<div><strong>🥦 Veggies &amp; protein</strong><br>1 cup raw veggies ~5g<br>Meat, eggs, fish ~0g<br>Beans ~20g per ½ cup</div>' +
+      '</div></details>' +
+      '<div class="mg-estimate-row"><label for="mg-carb-input">Total carbs:</label><input type="number" id="mg-carb-input" placeholder="0" min="0" max="300"><span>g</span><button class="mg-action-btn" id="mg-submit">Check</button></div>' +
+      '<div id="mg-result"></div>');
     setTimeout(() => {
       const input = document.getElementById('mg-carb-input');
-      if (input) input.focus();
       const submit = () => {
         const guess = parseInt(input.value, 10);
         if (isNaN(guess)) { input.focus(); return; }
         const diff = Math.abs(guess - total);
-        const stars = starsFromDiff(diff, [5, 10, 20]);
-        const cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        const breakdown = shuffled.map(f => f.name + ' ' + f.carbs + 'g').join(', ');
-        const headline = stars === 3 ? 'Spot on!' :
-                         stars === 2 ? 'Close!' :
-                         stars === 1 ? 'In the ballpark.' :
-                                       'Off by quite a bit.';
-        const msg = headline + ' Actual: <strong>' + total + 'g</strong> (you said ' + guess + 'g, off by ' + diff + 'g).' +
-                    '<br><small style="color:var(--text-secondary);">Breakdown: ' + breakdown + '.</small>';
-        const resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', () => onComplete({ stars: stars, summary: msg }));
+        const head = diff <= 5 ? 'Spot on!' : diff <= 15 ? 'Close! That\'s a good estimate.' : 'Good try! Here\'s how it adds up.';
+        const msg = '<p><strong>' + head + '</strong> You said ' + guess + 'g. The plate has about <strong>' + total + 'g</strong>.</p>' +
+          '<p><small>' + foods.map(f => f.emoji + ' ' + f.carbs + 'g').join(' + ') + '</small></p>';
+        mgFinish(msg, () => onComplete({ stars: starsFromDiff(diff, [5, 15, 30]), summary: head }), diff <= 15 ? '🎯' : '👍');
       };
       document.getElementById('mg-submit').addEventListener('click', submit);
       input.addEventListener('keypress', e => { if (e.key === 'Enter') submit(); });
@@ -1553,245 +1971,127 @@ MiniGames['Carb Counter'] = {
   }
 };
 
-// ---- Dose Calculator ----
-// Process-based: teaches the STEPS of dosing, not specific numbers.
-// Everyone's ratios are different and set by their diabetes team.
-MiniGames['Dose Calculator'] = {
+// ---- Mealtime Routine ----
+// Teaches the steps around mealtime insulin. Never asks for or shows a dose.
+MiniGames['Mealtime Routine'] = {
+  intro: { emoji: '🍽️', how: [
+    'A few questions about what you do at mealtime.',
+    'Pick an answer. If it\'s not the best one, Pip explains why and you can pick again.',
+    'Your own plan comes from your diabetes team. This game is about the steps, not the numbers.'] },
   play: function(opts, onComplete) {
     const tier = opts.tier || 1;
-    const bg = opts.currentBG || state.bg.current;
-    const meals = [
-      { name: 'Ham sandwich + apple',  carbs: 45, emoji: '🥪' },
-      { name: 'Slice of pizza + salad',carbs: 35, emoji: '🍕' },
-      { name: 'Cereal with milk',      carbs: 50, emoji: '🥣' },
-      { name: 'Chicken burrito',       carbs: 60, emoji: '🌯' },
-      { name: 'Mac and cheese',        carbs: 40, emoji: '🧀' },
-      { name: 'Rice + stir-fry',       carbs: 55, emoji: '🍚' }
+    const pump = state.player.device.insulin === 'pump';
+    const steps = tier <= 2 ? [
+      { art: '🍽️ 🤔', situation: 'Lunch is in front of you: a sandwich, an apple and milk.', q: 'What\'s the first step?',
+        choices: [
+          { text: '🩸 Check my BG', correct: true, feedback: 'Yes. Knowing your BG before you eat helps you and your plan.' },
+          { text: '😋 Eat first, think later', correct: false, feedback: 'It helps to check and count before eating, so your insulin can match your food.' },
+          { text: '🔁 Take the same insulin as yesterday', correct: false, feedback: 'Every meal is different. Your plan uses what you\'re eating today.' }
+        ] },
+      { art: '🥪 🍎 🥛 ➜ 🔢', situation: 'BG checked. Now the food.', q: 'What do you need to know about the food?',
+        choices: [
+          { text: '🔢 How many carbs it has', correct: true, feedback: 'Right. Carbs are what your mealtime insulin is for.' },
+          { text: '🎨 What colour it is', correct: false, feedback: 'Colour doesn\'t tell you much. Count the carbs.' },
+          { text: '⚖️ How heavy the plate is', correct: false, feedback: 'Weight alone doesn\'t tell you the carbs. Labels, charts and practice do.' }
+        ] },
+      { art: pump ? '🔢 ➜ 🎛️' : '🔢 ➜ 🖊️', situation: 'You know the carbs.', q: 'How do you figure out your mealtime insulin?',
+        choices: [
+          { text: '📋 Use the plan from my diabetes team', correct: true, feedback: 'Exactly. Everyone\'s plan is different, and your team sets yours. ' + (pump ? 'Your pump uses that plan when you enter the carbs.' : 'Your plan tells you what to take with your pen.') },
+          { text: '🌐 Look it up online', correct: false, feedback: 'Insulin is personal. Only your own diabetes team\'s plan is right for you.' },
+          { text: '🙋 Ask a friend what they take', correct: false, feedback: 'Your friend\'s plan is made for their body. Yours is made for yours.' }
+        ] },
+      { art: '📈 ⏱️', situation: 'An hour after eating, your BG is higher than before the meal.', q: 'What does that probably mean?',
+        choices: [
+          { text: '🍽️ The food is digesting and the insulin is still working', correct: true, feedback: 'Yes. BG usually goes up after eating and comes back down as insulin works.' },
+          { text: '❌ I did everything wrong', correct: false, feedback: 'Not at all. A rise after eating is normal. Give it time.' },
+          { text: '🍬 I should eat sugar', correct: false, feedback: 'Sugar is for lows (under 4). This is a normal after-meal rise.' }
+        ] }
+    ] : [
+      { art: '🎂 🍕 🤷', situation: 'Birthday party. No labels anywhere.', q: 'How do you count the carbs?',
+        choices: [
+          { text: '✋ Estimate using what I know (fist = about 1 cup)', correct: true, feedback: 'Yes. Estimating is a real skill, and close is good enough.' },
+          { text: '🙅 Skip eating', correct: false, feedback: 'You can enjoy the party. Estimating gets easier with practice.' },
+          { text: '🎲 Guess a random number', correct: false, feedback: 'Use what you know about portions instead. Your hand is a handy measuring tool.' }
+        ] },
+      { art: '🍕 🧀 🍟', situation: 'Pizza and fries have a lot of fat.', q: 'How can fat change what BG does?',
+        choices: [
+          { text: '🐢 It slows digestion, so BG may rise later than usual', correct: true, feedback: 'Right. With fatty meals, BG can rise hours later. Your diabetes team can help you plan for these meals.' },
+          { text: '🚫 Fat doesn\'t matter at all', correct: false, feedback: 'Fat slows down how fast carbs reach your blood, so it changes the timing.' },
+          { text: '⚡ Fat makes BG jump right away', correct: false, feedback: 'It\'s the other way around: fat slows things down.' }
+        ] },
+      { art: '📈 ⏱️ 🤔', situation: 'You followed your plan, but an hour later BG is climbing.', q: 'What\'s a good move?',
+        choices: [
+          { text: '⏳ Give the insulin time to work, then check again', correct: true, feedback: 'Yes. Insulin takes a while. Taking more too soon can stack up and cause a low.' },
+          { text: '💉 Take more insulin right away', correct: false, feedback: 'Insulin you already took is still working. Taking more too soon can stack up. Follow your plan for highs.' },
+          { text: '🏃 Run around to burn it off', correct: false, feedback: 'Exercise with fresh insulin working can make BG drop fast. Give it time first.' }
+        ] },
+      { art: '🧒 ➜ 🧑', situation: 'You\'re growing, starting new sports, and life is busy.', q: 'What about your plan?',
+        choices: [
+          { text: '🔄 It can change over time, so I check in with my diabetes team', correct: true, feedback: 'Exactly. Growing, activity, being sick and stress can all change what you need.' },
+          { text: '🔒 Once it\'s set, it never changes', correct: false, feedback: 'Plans change as you grow and as life changes. Your team helps you update it.' },
+          { text: '✏️ I change it myself whenever', correct: false, feedback: 'Changes to your plan are something to work out with your diabetes team.' }
+        ] }
     ];
-    const meal = meals[Math.floor(Math.random() * meals.length)];
-    const bgHigh = bg > 12;
-    const hasIOB = Math.random() > 0.5 && tier >= 2;
-
-    var steps;
-    if (tier <= 1) {
-      steps = [
-        { q: 'First step before dosing for a meal?',
-          choices: [
-            { text: 'Count the carbs in the meal', correct: true, feedback: 'Right! Knowing the carbs is always step one.' },
-            { text: 'Take the same dose as last time', correct: false, feedback: 'Every meal is different. Count the carbs first, then figure out the dose with your diabetes team\'s formula.' },
-            { text: 'Skip the dose if you feel fine', correct: false, feedback: 'Even if you feel OK, your body needs insulin to handle the carbs. Always dose for meals.' }
-          ]},
-        { q: 'You counted ' + meal.carbs + 'g of carbs. What do you need to know to figure out your dose?',
-          choices: [
-            { text: 'Your insulin-to-carb ratio (set by your diabetes team)', correct: true, feedback: 'Exactly! Your ratio tells you how many grams of carbs one unit of insulin covers. Everyone\'s is different.' },
-            { text: 'How much you weigh', correct: false, feedback: 'Weight matters for some medications, but for mealtime insulin you use your insulin-to-carb ratio. Your diabetes team sets this for you.' },
-            { text: 'What time of day it is', correct: false, feedback: 'Some people do have different ratios at different times, but the key thing you need is your insulin-to-carb ratio.' }
-          ]},
-        { q: 'Your BG is ' + bg.toFixed(1) + ' mmol/L.' + (bgHigh ? ' That\'s above target.' : ' That\'s in range.') + ' What does this mean for your dose?',
-          choices: bgHigh ? [
-            { text: 'I might need a correction on top of my meal dose', correct: true, feedback: 'Yes! When BG is above your target, your diabetes team may have you add a correction. Ask them about your correction factor.' },
-            { text: 'I should take less insulin because the number is already high', correct: false, feedback: 'Actually it\'s the opposite. A high BG means you may need MORE insulin: your meal dose plus a correction.' },
-            { text: 'It doesn\'t affect my dose', correct: false, feedback: 'Your current BG matters! When it\'s above target, you may need a correction dose on top of your meal dose.' }
-          ] : [
-            { text: 'My BG is in range, so I just need my meal dose', correct: true, feedback: 'Right! In range means no correction needed. Just dose for the carbs.' },
-            { text: 'I should take extra insulin to stay low', correct: false, feedback: 'Going lower than your target is dangerous. Dose for the carbs you\'re eating, not to push BG down further.' },
-            { text: 'I can skip the dose since my BG looks good', correct: false, feedback: 'Even with perfect BG, the carbs you\'re about to eat will raise it. You still need your meal dose.' }
-          ]}
-      ];
-    } else if (tier === 2) {
-      steps = [
-        { q: 'You\'re about to eat ' + meal.emoji + ' ' + meal.name + ' (' + meal.carbs + 'g carbs). Your BG is ' + bg.toFixed(1) + '. What\'s your first step?',
-          choices: [
-            { text: 'Use my carb ratio to figure out the meal dose', correct: true, feedback: 'Right. Your diabetes team gave you a ratio. Divide the carbs by that number to get your meal dose.' },
-            { text: 'Look up the dose online', correct: false, feedback: 'Doses are personal. Use the ratio your diabetes team set for you, not a number from the internet.' },
-            { text: 'Take the same dose as yesterday', correct: false, feedback: 'Different meals have different carbs. Always calculate based on what you\'re actually eating.' }
-          ]},
-        { q: (bgHigh ? 'BG is above target. ' : '') + (hasIOB ? 'You also have active insulin from a dose 2 hours ago. ' : '') + 'What should you consider?',
-          choices: hasIOB ? [
-            { text: 'Subtract the insulin still active (IOB) so I don\'t stack doses', correct: true, feedback: 'Smart! Insulin on board (IOB) is still working. Stacking doses can cause a dangerous low. Your pump tracks this, or ask your team how to estimate.' },
-            { text: 'Ignore the earlier dose and calculate fresh', correct: false, feedback: 'That earlier insulin is still working. If you ignore it and dose full again, you could go dangerously low. Always account for insulin on board.' },
-            { text: 'Wait until the old insulin wears off completely', correct: false, feedback: 'You don\'t have to wait. Just subtract the active insulin from your new dose. Your pump may do this automatically.' }
-          ] : (bgHigh ? [
-            { text: 'Add a correction dose using my correction factor', correct: true, feedback: 'Yes! Your correction factor tells you how much one unit lowers your BG. Your diabetes team sets this number for you.' },
-            { text: 'Double my normal meal dose', correct: false, feedback: 'Never just double your dose. Use your correction factor to calculate the exact extra amount. More is not always better with insulin.' },
-            { text: 'Skip the meal and wait for BG to come down', correct: false, feedback: 'You can still eat! Just add a correction to your meal dose. Skipping meals isn\'t a good way to manage highs.' }
-          ] : [
-            { text: 'Check if I have insulin still active from an earlier dose', correct: true, feedback: 'Good thinking! Even though BG is in range, insulin on board from a recent dose could stack with your new dose and cause a low.' },
-            { text: 'Nothing else, just dose for the carbs', correct: false, feedback: 'Close, but always check for active insulin first. If you dosed recently, that insulin is still working.' },
-            { text: 'Wait 30 minutes after eating to dose', correct: false, feedback: 'Actually, dosing before or right when you eat is usually better. Waiting lets BG spike first.' }
-          ])},
-        { q: 'When should you take your mealtime insulin?',
-          choices: [
-            { text: '10-15 minutes before eating (pre-bolus) when possible', correct: true, feedback: 'Pre-bolusing gives insulin a head start so it\'s working when carbs hit your blood. Even 5 minutes helps. Ask your team what timing works for you.' },
-            { text: 'Right after finishing the meal', correct: false, feedback: 'That works in a pinch, but dosing before you eat helps prevent the post-meal BG spike. Talk to your team about pre-bolusing.' },
-            { text: 'Only when BG goes above target after eating', correct: false, feedback: 'Waiting until BG is already high means playing catch-up. Dosing before or at the start of the meal keeps things steadier.' }
-          ]}
-      ];
-    } else {
-      steps = [
-        { q: 'Tricky scenario: you\'re eating ' + meal.emoji + ' ' + meal.name + ' at a birthday party. You\'re not sure exactly how many carbs are in your portion. What do you do?',
-          choices: [
-            { text: 'Estimate using hand-size references and dose for that', correct: true, feedback: 'Good! A fist is about 1 cup, a palm is a protein serving. Estimation is a skill. You won\'t always be exact, and that\'s OK.' },
-            { text: 'Skip eating so you don\'t have to guess', correct: false, feedback: 'You deserve to enjoy the party! Estimation gets better with practice. A close guess is much better than not eating.' },
-            { text: 'Eat without dosing and correct later if BG goes high', correct: false, feedback: 'That leads to a big spike. Even a rough estimate and partial dose is better than none.' }
-          ]},
-        { q: 'Your BG is ' + bg.toFixed(1) + ' and you notice the meal has a lot of fat (like pizza or fried food). How does fat affect dosing?',
-          choices: [
-            { text: 'Fat slows carb absorption, so BG may rise later than expected', correct: true, feedback: 'Right! With fatty meals, BG might look fine at first but climb hours later. Some people split their dose or use an extended bolus. Ask your team.' },
-            { text: 'Fat doesn\'t affect BG, only carbs matter', correct: false, feedback: 'Fat does matter! It slows digestion, so carbs hit your blood later. This can cause a delayed BG spike that catches people off guard.' },
-            { text: 'Take extra insulin because fat raises BG', correct: false, feedback: 'It\'s not that fat raises BG directly. It slows how fast carbs are absorbed. The total dose may be similar, but the timing matters.' }
-          ]},
-        { q: 'After the meal, your BG is climbing. You dosed correctly. What should you do?',
-          choices: [
-            { text: 'Wait. Insulin takes time to work. Check again in 1-2 hours.', correct: true, feedback: 'Patience! Fast-acting insulin takes 15-30 minutes to start working and peaks at 1-2 hours. Don\'t stack corrections too soon.' },
-            { text: 'Take another full correction dose right away', correct: false, feedback: 'Stacking insulin is dangerous. Your earlier dose is still absorbing. Give it at least 2-3 hours before correcting again.' },
-            { text: 'Exercise to bring it down faster', correct: false, feedback: 'Exercise on top of a fresh insulin dose can cause a dangerous low. Give the insulin time to work first.' }
-          ]},
-        { q: 'What\'s the most important thing to remember about insulin dosing?',
-          choices: [
-            { text: 'My ratios are personal. My diabetes team sets them and they can change over time.', correct: true, feedback: 'Exactly. Growth, stress, illness, exercise, and hormones all affect your needs. Regular check-ins with your team keep your ratios tuned.' },
-            { text: 'There\'s one correct dose for each amount of carbs', correct: false, feedback: 'Dosing is personal! The same meal might need different doses for different people, or even for the same person on different days.' },
-            { text: 'Once your ratios are set, they stay the same forever', correct: false, feedback: 'Ratios change! Growing, getting sick, being more active, stress, and hormones all shift what you need. Keep checking in with your team.' }
-          ]}
-      ];
-    }
-
-    var stepIdx = 0, correctCount = 0;
-
-    function renderStep() {
-      var s = steps[stepIdx];
-      var shuffled = s.choices.slice().sort(function() { return Math.random() - 0.5; });
-      renderMGPanel(
-        '<h2>💉 Dose Steps</h2>' +
-        '<p class="mg-subtitle">Think through the dosing process step by step.</p>' +
-        '<div class="mg-food-row">' +
-          '<div><span class="mg-food-emoji">' + meal.emoji + '</span><span class="mg-food-name">' + meal.name + '</span></div>' +
-          '<span class="mg-food-portion">' + meal.carbs + 'g carbs</span>' +
-        '</div>' +
-        '<div class="mg-food-row">' +
-          '<div><span class="mg-food-emoji">🩸</span><span class="mg-food-name">Current BG</span></div>' +
-          '<span class="mg-food-portion">' + bg.toFixed(1) + ' mmol/L</span>' +
-        '</div>' +
-        '<p style="margin:16px 0 8px;font-weight:600;font-size:15px;">Step ' + (stepIdx + 1) + ' of ' + steps.length + '</p>' +
-        '<p style="margin-bottom:14px;">' + s.q + '</p>' +
-        '<div class="mg-options-grid" style="grid-template-columns:1fr;">' +
-          shuffled.map(function(c, i) {
-            return '<div class="mg-option-card" data-idx="' + i + '" style="text-align:left;padding:14px 16px;">' +
-              '<span class="mg-opt-name">' + c.text + '</span></div>';
-          }).join('') +
-        '</div>' +
-        '<div id="mg-result"></div>'
-      );
-
-      setTimeout(function() {
-        document.querySelectorAll('.mg-option-card').forEach(function(card) {
-          card.addEventListener('click', function() {
-            var idx = parseInt(card.dataset.idx, 10);
-            var pick = shuffled[idx];
-            document.querySelectorAll('.mg-option-card').forEach(function(c) { c.style.pointerEvents = 'none'; });
-            card.classList.add('selected');
-            if (pick.correct) correctCount++;
-            var cls = pick.correct ? 'good' : 'bad';
-            var resDiv = document.getElementById('mg-result');
-            resDiv.className = 'mg-result ' + cls;
-            resDiv.innerHTML = '<p>' + (pick.correct ? '✓ ' : '✗ ') + pick.feedback + '</p>' +
-              '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-step-next">' +
-              (stepIdx < steps.length - 1 ? 'Next Step' : 'Finish') + '</button></div>';
-            document.getElementById('mg-step-next').addEventListener('click', function() {
-              stepIdx++;
-              if (stepIdx < steps.length) {
-                renderStep();
-              } else {
-                var stars = correctCount === steps.length ? 3 : correctCount >= steps.length - 1 ? 2 : correctCount >= 1 ? 1 : 0;
-                var msg = correctCount + ' of ' + steps.length + ' steps correct.';
-                eatFood(meal.carbs, 'slow');
-                doseInsulin(recommendedDose(meal.carbs, bg));
-                state.score.mealsManaged++;
-                onComplete({ stars: stars, summary: msg });
-              }
-            });
-          });
-        });
-      }, 30);
-    }
-
-    renderStep();
+    runSteps('🍽️ Mealtime Routine', 'Pick an answer. You can change it any time.', steps,
+      '<p><strong>Nice work!</strong> Check, count, follow your plan, then give it time. That\'s the routine.</p>',
+      onComplete);
   }
 };
 
 // ---- Treat-the-Low ----
-// Player picks the right fast-acting carb to treat a low BG.
+// Glucose tabs are always an option. Wrong picks explain why; pick again.
 MiniGames['Treat-the-Low'] = {
+  intro: { emoji: '🍬', how: [
+    'Your BG is under 4. Pick something with fast sugar.',
+    'If you pick something that isn\'t fast, Pip will tell you why and you can pick again.'] },
   play: function(opts, onComplete) {
-    // AUDIO: Play low-BG alarm tone
-    const bg = opts.currentBG && opts.currentBG < 4 ? opts.currentBG : (3.2 + Math.random() * 0.6);
-    const options = [
-      { emoji: '🧃', name: 'Juice box',         carbs: 15, ideal: true },
-      { emoji: '🍬', name: '4 glucose tabs',    carbs: 16, ideal: true },
-      { emoji: '🥤', name: 'Regular cola (sm)', carbs: 15, ideal: true },
-      { emoji: '🍯', name: '1 tbsp honey',      carbs: 17, ideal: true },
-      { emoji: '🍫', name: 'Chocolate bar',     carbs: 25, ideal: false, reason: 'Fat slows the sugar absorption — too slow for a low.' },
-      { emoji: '🥜', name: 'Handful of peanuts',carbs: 5,  ideal: false, reason: 'Mostly fat and protein. Barely any fast carbs.' },
-      { emoji: '🧀', name: 'Cheese stick',      carbs: 1,  ideal: false, reason: 'Almost no carbs — won\'t raise BG.' },
-      { emoji: '🍎', name: 'Whole apple',       carbs: 19, ideal: false, reason: 'Fibre slows it down. Fine as a snack, not ideal for a low.' },
-      { emoji: '🍦', name: 'Ice cream',         carbs: 20, ideal: false, reason: 'Fat in the ice cream slows the sugar absorption.' }
+    const bg = state.bg.current;
+    const tabs = { emoji: '🍬', name: 'Glucose tabs', note: '~15g', good: true, why: 'Glucose tabs are made for lows. They work fast and fit in a pocket.' };
+    const otherGood = [
+      { emoji: '🥄', name: 'Sugar dissolved in water', note: '1 tbsp', good: true, why: 'Plain sugar in water gets into your blood quickly.' },
+      { emoji: '🍯', name: 'Honey', note: '1 tbsp', good: true, why: 'Honey is fast sugar. A spoonful does the job.' },
+      { emoji: '🧃', name: 'Juice', note: '¾ cup', good: true, why: 'A small glass of juice works fast. Great for a low, even though it isn\'t an everyday drink.' }
     ];
-    // Pick 2 ideal + 2 non-ideal, shuffled
-    const idealPicks = options.filter(o => o.ideal).sort(() => Math.random() - 0.5).slice(0, 2);
-    const nonPicks   = options.filter(o => !o.ideal).sort(() => Math.random() - 0.5).slice(0, 2);
-    const choices = idealPicks.concat(nonPicks).sort(() => Math.random() - 0.5);
-
+    if (Math.random() < 0.15) otherGood.push({ emoji: '🥤', name: 'Regular pop (not diet)', note: '¾ cup', good: true, why: 'Regular pop has fast sugar, so it works for a low. It\'s not an everyday drink.' });
+    const notIdeal = [
+      { emoji: '🍫', name: 'Chocolate bar', good: false, why: 'The fat in chocolate slows the sugar down. Too slow for a low.' },
+      { emoji: '🥜', name: 'Handful of nuts', good: false, why: 'Nuts are mostly fat and protein. Great later, but they won\'t bring BG up fast.' },
+      { emoji: '🧀', name: 'Cheese stick', good: false, why: 'Cheese has almost no carbs, so it won\'t raise BG.' },
+      { emoji: '🍎', name: 'Whole apple', good: false, why: 'The fibre in an apple slows it down. A good snack, but not fast enough for a low.' },
+      { emoji: '🍨', name: 'Ice cream', good: false, why: 'The fat in ice cream slows the sugar down.' },
+      { emoji: '🥤', name: 'Diet pop', good: false, why: 'Diet pop has no sugar at all, so it can\'t raise BG.' },
+      { emoji: '💧', name: 'Water', good: false, why: 'Water is great, but it has no sugar. You need fast sugar first.' },
+      { emoji: '🥛', name: 'Glass of milk', good: false, why: 'Milk has protein and fat that slow it down. Better as the snack afterwards.' }
+    ];
+    const options = shuffle([tabs, pick(otherGood)].concat(shuffle(notIdeal).slice(0, 2)));
     renderMGPanel(
       '<h2>⚠️ Treat the Low</h2>' +
-      '<p class="mg-subtitle">BG: <strong style="color:var(--zone-red);font-size:22px;">' + bg.toFixed(1) + '</strong> — you feel shaky, sweaty, hungry.</p>' +
-      '<p style="margin-bottom:12px;">Pick the best thing to bring BG up fast. <strong>15-15 rule:</strong> eat 15g of fast carbs, wait 15 minutes, recheck.</p>' +
-      '<div class="mg-options-grid">' +
-        choices.map((c, i) =>
-          '<div class="mg-option-card" data-idx="' + i + '">' +
-            '<span class="mg-opt-emoji">' + c.emoji + '</span>' +
-            '<span class="mg-opt-name">' + c.name + '</span>' +
-            '<span class="mg-opt-carbs">~' + c.carbs + 'g carbs</span>' +
-          '</div>'
-        ).join('') +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
-
-    // Update state BG to the shown value for screen effects
-    state.bg.current = Math.round(bg * 10) / 10;
-    state.bg.trend = 'falling';
-    notify();
-
+      '<p class="mg-subtitle">BG: <strong class="bg-big red">' + bg.toFixed(1) + '</strong>. Pick something with fast sugar.</p>' +
+      '<div class="mg-options-grid">' + options.map((o, i) =>
+        '<div class="mg-option-card" data-idx="' + i + '"><span class="mg-opt-emoji">' + o.emoji + '</span><span class="mg-opt-name">' + o.name + '</span>' +
+        (o.note ? '<span class="mg-opt-carbs">' + o.note + '</span>' : '') + '</div>').join('') + '</div>' +
+      '<div id="mg-low-fb" class="quiz-feedback"></div><div id="mg-result"></div>');
+    let tried = false;
     setTimeout(() => {
       document.querySelectorAll('.mg-option-card').forEach(card => {
         card.addEventListener('click', () => {
-          const idx = parseInt(card.dataset.idx, 10);
-          const pick = choices[idx];
-          document.querySelectorAll('.mg-option-card').forEach(c => c.style.pointerEvents = 'none');
+          const o = options[parseInt(card.dataset.idx, 10)];
+          document.querySelectorAll('.mg-option-card').forEach(c => c.classList.remove('selected'));
           card.classList.add('selected');
-          let stars, cls, msg;
-          if (pick.ideal) {
-            stars = 3; cls = 'good';
-            msg = '✓ Good call. <strong>' + pick.name + '</strong> is ~15g of fast-acting carbs. Wait 15 minutes and recheck before eating anything else.';
-          } else {
-            stars = 0; cls = 'bad';
-            msg = '✗ ' + pick.reason + ' You still need a fast-acting carb.';
+          const fb = document.getElementById('mg-low-fb');
+          if (!o.good) {
+            tried = true;
+            card.classList.add('dim');
+            fb.className = 'quiz-feedback try';
+            fb.innerHTML = '🤔 ' + o.why + ' <em>Pick something with fast sugar.</em>';
+            return;
           }
-          const resDiv = document.getElementById('mg-result');
-          resDiv.className = 'mg-result ' + cls;
-          resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-            (stars === 3 ? '⭐⭐⭐' : '❌') + '</div>' + msg +
-            '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-          document.getElementById('mg-continue').addEventListener('click', () => {
-            if (pick.ideal) {
-              eatFood(pick.carbs, 'fast');
-              // Simulated immediate rescue
-              state.bg.current = Math.max(state.bg.current, 5.8);
-              state.bg.trend = 'rising';
-              notify();
-            }
-            onComplete({ stars: stars, summary: msg });
-          });
+          fb.className = 'quiz-feedback right';
+          fb.innerHTML = '✅ ' + o.why;
+          document.querySelectorAll('.mg-option-card').forEach(c => c.style.pointerEvents = 'none');
+          state.narrative.lastLowTreat = 15;
+          mgFinish('<p>You have the ' + o.name.toLowerCase() + '. Now wait 15 minutes and check again.</p>',
+            () => onComplete({ stars: tried ? 2 : 3, summary: o.name, noTick: true }), o.emoji);
         });
       });
     }, 30);
@@ -1799,417 +2099,295 @@ MiniGames['Treat-the-Low'] = {
 };
 
 // ---- Label Reader ----
-// Canadian Nutrition Facts label reading. No timer. Accuracy only.
+// Canadian Nutrition Facts label. No timer. Wrong answers get a hint and another try.
 MiniGames['Label Reader'] = {
+  intro: { emoji: '🏷️', how: [
+    'You\'ll see a Nutrition Facts table, like the ones on food in Canada.',
+    'Answer a few questions by reading the label.',
+    'If an answer isn\'t right, you get a hint and can try again. No rush.'] },
   play: function(opts, onComplete) {
-    var tier = opts.tier || 1;
-    var labels = [
-      { product: '🥣 Oatmeal', servingSize: '1 packet (43g)', servingsPerPkg: 8, totalCarbs: 27, fibre: 3, sugar: 12, calories: 160 },
-      { product: '🥤 Apple Juice', servingSize: '250 mL', servingsPerPkg: 4, totalCarbs: 28, fibre: 0, sugar: 24, calories: 110 },
-      { product: '🍪 Chocolate Chip Cookies', servingSize: '2 cookies (30g)', servingsPerPkg: 10, totalCarbs: 22, fibre: 1, sugar: 11, calories: 140 },
-      { product: '🥜 Peanut Butter', servingSize: '1 tbsp (15g)', servingsPerPkg: 30, totalCarbs: 3, fibre: 1, sugar: 1, calories: 90 },
-      { product: '🧃 Fruit Snacks', servingSize: '1 pouch (22g)', servingsPerPkg: 6, totalCarbs: 18, fibre: 0, sugar: 11, calories: 80 },
-      { product: '🥛 Chocolate Milk', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 26, fibre: 0, sugar: 24, calories: 160 },
-      { product: '🍞 Whole Wheat Bread', servingSize: '1 slice (38g)', servingsPerPkg: 20, totalCarbs: 18, fibre: 3, sugar: 2, calories: 90 },
-      { product: '🥫 Tomato Soup', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 20, fibre: 2, sugar: 12, calories: 100 }
+    const tier = opts.tier || 1;
+    const labels = [
+      { product: '🥣 Oatmeal packets', servingSize: '1 packet (43 g)', servingsPerPkg: 8, totalCarbs: 27, fibre: 3, sugar: 12, calories: 160 },
+      { product: '🧃 Apple juice', servingSize: '250 mL', servingsPerPkg: 4, totalCarbs: 28, fibre: 0, sugar: 24, calories: 110 },
+      { product: '🍪 Chocolate chip cookies', servingSize: '2 cookies (30 g)', servingsPerPkg: 10, totalCarbs: 22, fibre: 1, sugar: 11, calories: 140 },
+      { product: '🍘 Whole grain crackers', servingSize: '8 crackers (20 g)', servingsPerPkg: 12, totalCarbs: 14, fibre: 2, sugar: 1, calories: 90 },
+      { product: '🍬 Fruit snacks', servingSize: '1 pouch (22 g)', servingsPerPkg: 6, totalCarbs: 18, fibre: 0, sugar: 11, calories: 80 },
+      { product: '🥛 Chocolate milk', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 26, fibre: 0, sugar: 24, calories: 160 },
+      { product: '🍞 Whole wheat bread', servingSize: '1 slice (38 g)', servingsPerPkg: 20, totalCarbs: 18, fibre: 3, sugar: 2, calories: 90 },
+      { product: '🥫 Tomato soup', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 20, fibre: 2, sugar: 12, calories: 100 },
+      { product: '🥣 Breakfast cereal', servingSize: '1 cup (30 g)', servingsPerPkg: 12, totalCarbs: 25, fibre: 3, sugar: 6, calories: 110 },
+      { product: '🫙 Plain yogurt', servingSize: '¾ cup (175 g)', servingsPerPkg: 4, totalCarbs: 12, fibre: 0, sugar: 10, calories: 120 }
     ];
-    var label = labels[Math.floor(Math.random() * labels.length)];
-    var netCarbs = label.totalCarbs - label.fibre;
-    var wholePackageCarbs = label.totalCarbs * label.servingsPerPkg;
+    const L = pick(labels);
+    const whole = L.totalCarbs * L.servingsPerPkg;
+    const qs = [{ q: 'How many grams of carbohydrate are in one serving?', answer: L.totalCarbs, unit: 'g', hint: 'Find the line that says <strong>Carbohydrate / Glucides</strong>.', explain: 'Total carbohydrate is the number you use when counting carbs.' },
+                { q: 'How many servings are in the whole package?', answer: L.servingsPerPkg, unit: '', hint: 'Look near the top for <strong>servings per container</strong>.', explain: 'If you eat more than one serving, the carbs add up.' }];
+    if (tier >= 2) qs.push({ q: 'If you ate TWO servings, how many grams of carbs would that be?', answer: L.totalCarbs * 2, unit: 'g', hint: 'Take the carbs for one serving and add it twice.', explain: 'Two servings means double the carbs. A super common trap!' });
+    if (tier >= 2) qs.push({ q: 'How many grams of fibre are in one serving?', answer: L.fibre, unit: 'g', hint: 'Fibre is listed just under Carbohydrate.', explain: 'Fibre is part of the carbohydrate number. Ask your diabetes team how they want you to count it.' });
+    if (tier >= 3) qs.push({ q: 'How many grams of carbs are in the WHOLE package?', answer: whole, unit: 'g', hint: 'Carbs per serving × servings per container. (' + L.totalCarbs + ' × ' + L.servingsPerPkg + ')', explain: 'Big packages can hold a lot more than one serving.' });
+    if (tier >= 3) qs.push({ q: 'How many grams of sugars are in one serving?', answer: L.sugar, unit: 'g', hint: 'Sugars are listed under Carbohydrate too.', explain: 'Sugars are part of the total carbohydrate, not extra on top.' });
 
-    var questions;
-    if (tier <= 1) {
-      questions = [
-        { q: 'How many total carbohydrates per serving?', answer: label.totalCarbs, unit: 'g', explain: 'Total carbohydrates is the number you need for dosing.' },
-        { q: 'What is the serving size?', answer: label.servingSize, type: 'text', explain: 'Always check serving size first. You might eat more or less than one serving.' },
-        { q: 'How many servings in the package?', answer: label.servingsPerPkg, unit: '', explain: 'If you eat the whole thing, multiply carbs by this number.' }
-      ];
-    } else if (tier <= 2) {
-      questions = [
-        { q: 'How many total carbohydrates per serving?', answer: label.totalCarbs, unit: 'g', explain: 'Total carbohydrates is the number you need for dosing.' },
-        { q: 'How many servings in the package?', answer: label.servingsPerPkg, unit: '', explain: 'If you eat the whole thing, multiply carbs by this number.' },
-        { q: 'How many total carbs if you eat the WHOLE package?', answer: wholePackageCarbs, unit: 'g', explain: 'Multiply carbs per serving by number of servings. A common trap!' },
-        { q: 'How many grams of fibre per serving?', answer: label.fibre, unit: 'g', explain: 'Fibre can be subtracted from total carbs for "net carbs." It does not raise BG.' }
-      ];
-    } else {
-      questions = [
-        { q: 'How many total carbohydrates per serving?', answer: label.totalCarbs, unit: 'g', explain: 'Total carbohydrates is the number you need for dosing.' },
-        { q: 'How many total carbs if you eat the WHOLE package?', answer: wholePackageCarbs, unit: 'g', explain: 'Multiply carbs per serving by number of servings.' },
-        { q: 'How many grams of fibre per serving?', answer: label.fibre, unit: 'g', explain: 'Fibre can be subtracted from total carbs for "net carbs."' },
-        { q: 'What are the "net carbs" per serving? (total carbs minus fibre)', answer: netCarbs, unit: 'g', explain: 'Net carbs = total carbs - fibre. This is what actually raises your BG.' },
-        { q: 'How many grams of sugar per serving?', answer: label.sugar, unit: 'g', explain: 'Sugar is part of total carbs. It tells you how fast the carbs might hit.' }
-      ];
+    let qi = 0, firstTry = 0;
+    const labelHtml = '<div class="nf-label">' +
+      '<div class="nf-title">Nutrition Facts</div><div class="nf-sub">Valeur nutritive</div>' +
+      '<div class="nf-line">Per ' + L.servingSize + ' / pour ' + L.servingSize + '</div>' +
+      '<div class="nf-line nf-thick">Servings per container / Portions par contenant <strong>' + L.servingsPerPkg + '</strong></div>' +
+      '<div class="nf-line nf-row"><strong>Calories ' + L.calories + '</strong></div>' +
+      '<div class="nf-line nf-row"><strong>Carbohydrate / Glucides</strong><span>' + L.totalCarbs + ' g</span></div>' +
+      '<div class="nf-line nf-row nf-indent">Fibre / Fibres<span>' + L.fibre + ' g</span></div>' +
+      '<div class="nf-line nf-row nf-indent">Sugars / Sucres<span>' + L.sugar + ' g</span></div></div>';
+
+    renderMGPanel('<h2>🏷️ Label Reader</h2><p class="mg-subtitle">' + L.product + '</p>' + labelHtml + '<div id="mg-question"></div><div id="mg-result"></div>');
+
+    function showQ() {
+      const qd = qs[qi];
+      let misses = 0;
+      const box = document.getElementById('mg-question');
+      box.innerHTML = '<p class="step-q"><strong>' + (qi + 1) + ' of ' + qs.length + ':</strong> ' + qd.q + '</p>' +
+        '<div class="mg-estimate-row"><input type="number" id="mg-label-input" placeholder="0" min="0" max="9999"><span>' + qd.unit + '</span><button class="mg-action-btn" id="mg-label-submit">Answer</button></div>' +
+        '<div id="mg-q-feedback"></div>';
+      const input = document.getElementById('mg-label-input');
+      const next = () => { qi++; if (qi < qs.length) showQ(); else { box.innerHTML = ''; mgFinish('<p><strong>Label master!</strong> Serving size, servings, carbs: that\'s how you read a label.</p>', () => onComplete({ stars: firstTry === qs.length ? 3 : 2, summary: 'Label read' }), '🏷️'); } };
+      const submit = () => {
+        const val = parseInt(input.value, 10);
+        if (isNaN(val)) { input.focus(); return; }
+        const fb = document.getElementById('mg-q-feedback');
+        if (val === qd.answer) {
+          if (misses === 0) firstTry++;
+          fb.innerHTML = '<p class="quiz-feedback right">✅ Yes, ' + qd.answer + qd.unit + '. ' + qd.explain + '</p><button class="mg-action-btn" id="mg-next-q">Next ▶</button>';
+          document.getElementById('mg-label-submit').disabled = true;
+          document.getElementById('mg-next-q').addEventListener('click', next);
+        } else {
+          misses++;
+          if (misses < 3) {
+            fb.innerHTML = '<p class="quiz-feedback try">🤔 Not quite. ' + qd.hint + ' Try again.</p>';
+            input.select();
+          } else {
+            fb.innerHTML = '<p class="quiz-feedback try">💡 It\'s <strong>' + qd.answer + qd.unit + '</strong>. ' + qd.hint + ' ' + qd.explain + '</p><button class="mg-action-btn" id="mg-next-q">Got it ▶</button>';
+            document.getElementById('mg-label-submit').disabled = true;
+            document.getElementById('mg-next-q').addEventListener('click', next);
+          }
+        }
+      };
+      document.getElementById('mg-label-submit').addEventListener('click', submit);
+      input.addEventListener('keypress', e => { if (e.key === 'Enter') submit(); });
+      input.focus();
     }
-
-    var currentQ = 0;
-    var correct = 0;
-
-    function renderLabel() {
-      return '<div style="background:#fff;border:3px solid #000;padding:16px;border-radius:4px;max-width:280px;margin:0 auto 16px;font-family:Arial,sans-serif;color:#000;font-size:13px;line-height:1.4;">' +
-        '<div style="font-size:18px;font-weight:bold;border-bottom:8px solid #000;padding-bottom:4px;">Nutrition Facts</div>' +
-        '<div style="font-size:11px;border-bottom:1px solid #000;padding:2px 0;">Valeur nutritive</div>' +
-        '<div style="border-bottom:1px solid #000;padding:4px 0;"><strong>Serving Size / Portion</strong> ' + label.servingSize + '</div>' +
-        '<div style="border-bottom:4px solid #000;padding:4px 0;">Servings Per Container / Portions par contenant <strong>' + label.servingsPerPkg + '</strong></div>' +
-        '<div style="border-bottom:1px solid #000;padding:3px 0;display:flex;justify-content:space-between;"><strong>Calories / Calories</strong><span><strong>' + label.calories + '</strong></span></div>' +
-        '<div style="border-bottom:1px solid #000;padding:3px 0;display:flex;justify-content:space-between;font-weight:bold;">Total Carbohydrate / Glucides<span>' + label.totalCarbs + 'g</span></div>' +
-        '<div style="border-bottom:1px solid #000;padding:3px 0;display:flex;justify-content:space-between;padding-left:16px;">Dietary Fibre / Fibres<span>' + label.fibre + 'g</span></div>' +
-        '<div style="border-bottom:1px solid #000;padding:3px 0;display:flex;justify-content:space-between;padding-left:16px;">Sugars / Sucres<span>' + label.sugar + 'g</span></div>' +
-        '</div>';
-    }
-
-    function showQuestion() {
-      if (currentQ >= questions.length) {
-        var missed = questions.length - correct;
-        var stars = missed === 0 ? 3 : missed === 1 ? 2 : missed === 2 ? 1 : 0;
-        var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        var headline = stars === 3 ? 'Perfect reading!' : stars === 2 ? 'Almost perfect.' : stars === 1 ? 'Room to improve.' : 'Keep practicing label reading.';
-        var msg = headline + ' Got ' + correct + ' out of ' + questions.length + ' correct.';
-        var resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', function() { onComplete({ stars: stars, summary: msg }); });
-        return;
-      }
-      var qData = questions[currentQ];
-      var qDiv = document.getElementById('mg-question');
-      if (qData.type === 'text') {
-        qDiv.innerHTML = '<p style="font-weight:bold;margin-bottom:8px;">' + qData.q + '</p>' +
-          '<p style="color:var(--text-secondary);">Answer: <strong>' + qData.answer + '</strong></p>' +
-          '<p style="font-size:13px;color:var(--text-secondary);margin-top:6px;">💡 ' + qData.explain + '</p>' +
-          '<button class="mg-action-btn" id="mg-next-q">Next</button>';
-        correct++;
-        currentQ++;
-        document.getElementById('mg-next-q').addEventListener('click', showQuestion);
-      } else {
-        qDiv.innerHTML = '<p style="font-weight:bold;margin-bottom:8px;">Q' + (currentQ + 1) + ': ' + qData.q + '</p>' +
-          '<div class="mg-estimate-row"><input type="number" id="mg-label-input" placeholder="0" min="0" max="999"><span>' + qData.unit + '</span>' +
-          '<button class="mg-action-btn" id="mg-label-submit">Answer</button></div>' +
-          '<div id="mg-q-feedback"></div>';
-        setTimeout(function() {
-          var input = document.getElementById('mg-label-input');
-          if (input) input.focus();
-          var submit = function() {
-            var val = parseInt(input.value, 10);
-            if (isNaN(val)) { input.focus(); return; }
-            var fb = document.getElementById('mg-q-feedback');
-            if (val === qData.answer) {
-              correct++;
-              fb.innerHTML = '<p style="color:var(--zone-green);">✓ Correct!</p><p style="font-size:13px;color:var(--text-secondary);">💡 ' + qData.explain + '</p>';
-            } else {
-              fb.innerHTML = '<p style="color:var(--zone-red);">✗ The answer was <strong>' + qData.answer + qData.unit + '</strong>.</p><p style="font-size:13px;color:var(--text-secondary);">💡 ' + qData.explain + '</p>';
-            }
-            currentQ++;
-            fb.innerHTML += '<button class="mg-action-btn" id="mg-next-q" style="margin-top:10px;">Next</button>';
-            document.getElementById('mg-next-q').addEventListener('click', showQuestion);
-          };
-          document.getElementById('mg-label-submit').addEventListener('click', submit);
-          input.addEventListener('keypress', function(e) { if (e.key === 'Enter') submit(); });
-        }, 30);
-      }
-    }
-
-    renderMGPanel(
-      '<h2>🏷️ Label Reader</h2>' +
-      '<p class="mg-subtitle">' + label.product + ' — Read the label carefully. No rush.</p>' +
-      renderLabel() +
-      '<div id="mg-question"></div>' +
-      '<div id="mg-result"></div>'
-    );
-    setTimeout(showQuestion, 50);
+    setTimeout(showQ, 30);
   }
 };
 
 // ---- Exercise Balance ----
-// BG drops during exercise. Decide when to pause and eat.
+// BG falls while you move. One snack at a time, and it takes a few minutes to work.
+// A dip under 4 pauses for a treatment instead of ending the game.
 MiniGames['Exercise Balance'] = {
+  intro: { emoji: '⚽', how: [
+    'You\'re being active, and moving uses up sugar, so your BG slowly drops.',
+    'Tap <strong>🍌 Snack</strong> when BG gets close to the bottom of the green zone (5).',
+    'A snack takes a few minutes to work, so you can only have one at a time.',
+    'Goal: finish with your BG in the green zone, not too low and not too high.'] },
   play: function(opts, onComplete) {
-    var startBG = opts.currentBG || state.bg.current;
-    if (startBG < 5.5) startBG = 7.0;
-    var bg = startBG;
-    var exerciseSeconds = 0;
-    var paused = false;
-    var snacksUsed = 0;
-    var wentLow = false;
-    var finished = false;
-    var targetSeconds = 60;
-    var dropRate = 0.04 + (opts.tier || 1) * 0.01;
-
+    const tier = opts.tier || 1;
+    let bg = state.bg.current;
+    const TOTAL = 60, MS = 400, RISE = 1.6, DIGEST = 8;
+    const phases = [
+      { until: 10, name: 'Warm-up', emoji: '🤸', rate: 0.04 },
+      { until: 45, name: 'Main activity', emoji: opts.activity || '⚽', rate: 0.07 + tier * 0.01 },
+      { until: 60, name: 'Cool-down', emoji: '🧘', rate: 0.03 }
+    ];
+    let minute = 0, digest = 0, snacks = 0, green = 0, timeouts = 0, paused = false, done = false;
+    let note = '';
+    if (bg < 5.5) { digest = DIGEST; snacks = 1; note = 'Your BG was a bit low to start, so you had a snack first.'; }
+    const pct = v => Math.max(0, Math.min(100, ((v - 2) / 14) * 100));
     renderMGPanel(
-      '<h2>🏃 Exercise Balance</h2>' +
-      '<p class="mg-subtitle">Keep exercising, but watch your BG. Pause to snack when you need to.</p>' +
-      '<div style="text-align:center;margin:16px 0;">' +
-        '<div style="font-size:48px;" id="mg-runner">🏃</div>' +
-        '<div style="margin:8px 0;font-size:14px;">BG: <span id="mg-ex-bg" style="font-weight:bold;">' + bg.toFixed(1) + '</span> mmol/L</div>' +
-        '<div style="background:var(--border);border-radius:8px;height:20px;overflow:hidden;margin:8px auto;max-width:300px;">' +
-          '<div id="mg-ex-bar" style="height:100%;width:0%;background:var(--zone-green);transition:width 0.3s;"></div>' +
-        '</div>' +
-        '<div style="font-size:13px;color:var(--text-secondary);" id="mg-ex-status">Exercise: 0/' + targetSeconds + 's</div>' +
-      '</div>' +
-      '<div style="text-align:center;margin:16px 0;">' +
-        '<button class="mg-action-btn" id="mg-ex-snack">🍌 Eat a Snack (+15g carbs)</button>' +
-      '</div>' +
-      '<div style="text-align:center;color:var(--text-secondary);font-size:13px;margin-bottom:8px;">Exercise runs automatically. Eat a snack before BG drops below 4.0.</div>' +
-      '<div id="mg-result"></div>'
-    );
-
-    setTimeout(function() {
-      var bgEl = document.getElementById('mg-ex-bg');
-      var barEl = document.getElementById('mg-ex-bar');
-      var statusEl = document.getElementById('mg-ex-status');
-      var runnerEl = document.getElementById('mg-runner');
-      var snackBtn = document.getElementById('mg-ex-snack');
-
-      snackBtn.addEventListener('click', function() {
-        if (finished) return;
-        bg += 2.0;
-        snacksUsed++;
-        paused = true;
-        runnerEl.textContent = '🧍';
-        statusEl.textContent = 'Snacking... +15g carbs';
-        setTimeout(function() {
-          if (!finished) {
-            paused = false;
-            runnerEl.textContent = '🏃';
-          }
-        }, 2000);
-      });
-
-      var interval = setInterval(function() {
-        if (finished) { clearInterval(interval); return; }
-        if (!paused) {
-          exerciseSeconds++;
-          bg -= dropRate + (Math.random() * 0.01);
-          bg = Math.round(bg * 10) / 10;
-        }
-
+      '<h2>' + (opts.activity || '⚽') + ' Exercise Balance</h2>' +
+      '<p class="mg-subtitle" id="mg-ex-phase">Get ready...</p>' +
+      '<div class="ex-track"><div class="ex-runner" id="mg-runner">🏃</div><div class="ex-flag">🏁</div></div>' +
+      '<div class="ex-meter"><div class="ex-green" style="left:' + pct(5) + '%;width:' + (pct(10) - pct(5)) + '%"></div>' +
+        '<div class="ex-marker" id="mg-ex-marker"></div><span class="ex-lbl" style="left:' + pct(5) + '%">5</span><span class="ex-lbl" style="left:' + pct(10) + '%">10</span></div>' +
+      '<div class="ex-bg">BG <strong id="mg-ex-bg">' + bg.toFixed(1) + '</strong></div>' +
+      '<div style="text-align:center;margin:12px 0;"><button class="mg-action-btn big" id="mg-ex-snack">🍌 Snack</button></div>' +
+      '<p class="ex-status" id="mg-ex-status">' + (note || '&nbsp;') + '</p>' +
+      '<div id="mg-result"></div>');
+    setTimeout(() => {
+      const bgEl = document.getElementById('mg-ex-bg'), marker = document.getElementById('mg-ex-marker');
+      const runner = document.getElementById('mg-runner'), phaseEl = document.getElementById('mg-ex-phase');
+      const statusEl = document.getElementById('mg-ex-status'), snackBtn = document.getElementById('mg-ex-snack');
+      const draw = () => {
         bgEl.textContent = bg.toFixed(1);
-        bgEl.style.color = bg < 4.0 ? 'var(--zone-red)' : bg < 5.0 ? 'var(--zone-yellow)' : 'var(--zone-green)';
-        barEl.style.width = Math.min(100, (exerciseSeconds / targetSeconds) * 100) + '%';
-        barEl.style.backgroundColor = bg < 4.0 ? 'var(--zone-red)' : bg < 5.0 ? 'var(--zone-yellow)' : 'var(--zone-green)';
-        statusEl.textContent = paused ? 'Snacking...' : 'Exercise: ' + exerciseSeconds + '/' + targetSeconds + 's';
-
-        if (bg < 4.0) wentLow = true;
-        if (bg < 3.0 || exerciseSeconds >= targetSeconds) {
-          finished = true;
-          clearInterval(interval);
-          runnerEl.textContent = bg < 3.0 ? '😵' : '🎉';
-
-          var stars;
-          if (bg >= 4.0 && bg <= 12.0 && exerciseSeconds >= targetSeconds) stars = 3;
-          else if (bg >= 3.5 && exerciseSeconds >= targetSeconds) stars = 2;
-          else if (exerciseSeconds >= targetSeconds * 0.6) stars = 1;
-          else stars = 0;
-
-          var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-          var headline = stars === 3 ? 'Great balance!' : stars === 2 ? 'Finished, but BG got low.' : stars === 1 ? 'Tough session.' : 'BG crashed. Had to stop early.';
-          var msg = headline + ' Final BG: <strong>' + bg.toFixed(1) + '</strong>. Snacks used: ' + snacksUsed + '.';
-          if (wentLow) msg += '<br><small>💡 Exercise lowers BG. Eating a snack BEFORE you go low keeps you in range.</small>';
-          var resDiv = document.getElementById('mg-result');
-          resDiv.className = 'mg-result ' + cls;
-          resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-            (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-            '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-          document.getElementById('mg-continue').addEventListener('click', function() {
-            state.bg.current = bg;
-            notify();
-            onComplete({ stars: stars, summary: msg });
-          });
+        bgEl.style.color = bg < 4 ? 'var(--zone-red)' : (bg < 5 || bg > 10) ? '#d39e00' : 'var(--zone-green)';
+        marker.style.left = pct(bg) + '%';
+        runner.style.left = (minute / TOTAL * 88) + '%';
+        snackBtn.disabled = digest > 0 || paused || done;
+        snackBtn.textContent = digest > 0 ? '😋 Digesting...' : '🍌 Snack';
+      };
+      snackBtn.addEventListener('click', () => {
+        if (digest > 0 || paused || done) return;
+        digest = DIGEST; snacks++;
+        statusEl.textContent = 'Snack eaten. It takes a few minutes to kick in.';
+        draw();
+      });
+      draw();
+      const loop = setInterval(() => {
+        if (done || paused) return;
+        if (!document.getElementById('mg-ex-bg')) { clearInterval(loop); return; }
+        const ph = phases.find(p => minute < p.until) || phases[2];
+        phaseEl.textContent = ph.emoji + ' ' + ph.name + ' · minute ' + minute + ' of ' + TOTAL;
+        runner.textContent = ph.emoji === '🧘' ? '🚶' : '🏃';
+        bg -= ph.rate + Math.random() * 0.02;
+        if (digest > 0) { bg += RISE / DIGEST; digest--; if (digest === 0) statusEl.innerHTML = '&nbsp;'; }
+        if (inRange(bg)) green++;
+        minute++;
+        if (bg < 4) {
+          paused = true; timeouts++;
+          statusEl.innerHTML = '⏸️ <strong>Time out!</strong> BG is under 4. You stop, have glucose tabs and sit out for a bit.';
+          runner.textContent = '🪑';
+          let k = 0;
+          const rec = setInterval(() => {
+            bg += 0.25; k++; draw();
+            if (k >= 8) { clearInterval(rec); paused = false; statusEl.textContent = 'Feeling better. Back in the game!'; }
+          }, 350);
         }
-      }, 200);
+        if (minute >= TOTAL) finish();
+        draw();
+      }, MS);
+      function finish() {
+        done = true; clearInterval(loop);
+        runner.textContent = '🎉';
+        bg = Math.round(bg * 10) / 10;
+        let msg;
+        if (bg > 10) msg = '<p><strong>You stayed safe the whole time!</strong> You finished a bit high (' + bg.toFixed(1) + '). Next time, try waiting a little longer between snacks.</p>';
+        else if (bg < 5) msg = '<p><strong>You made it!</strong> You finished a bit low (' + bg.toFixed(1) + '). A snack a little earlier would help, and have something when you\'re done.</p>';
+        else msg = '<p><strong>Great balance!</strong> You finished in the green zone at ' + bg.toFixed(1) + '.</p>';
+        msg += '<p><small>Snacks: ' + snacks + ' · Time in the green zone: ' + Math.round(green / TOTAL * 100) + '%</small></p>';
+        if (timeouts) msg += '<p><small>You also stopped to treat a low. That\'s exactly the right move.</small></p>';
+        msg += '<p><small>💡 Activity can keep lowering BG for hours afterwards, so keep an eye on it later too.</small></p>';
+        mgFinish(msg, () => {
+          state.bg.current = bg;
+          state.bg.trend = 'stable';
+          notify();
+          onComplete({ stars: inRange(bg) ? (green / TOTAL >= 0.7 ? 3 : 2) : 1, summary: 'Exercise done', hours: 1.0 });
+        }, inRange(bg) ? '🏅' : '👍');
+      }
     }, 50);
   }
 };
 
 // ---- Pack Your Bag ----
-// Click items to pack for a trip. Must get all essentials.
 MiniGames['Pack Your Bag'] = {
+  intro: { emoji: '🎒', how: [
+    'Tap the things you want to pack. Tap again to take something out.',
+    'When you\'re ready, tap Done. If something important is missing, Pip will give you a hint.'] },
   play: function(opts, onComplete) {
-    var tier = opts.tier || 1;
-    var isPump = state.player.device.insulin === 'pump';
-    var isCGM = state.player.device.bgMonitor === 'cgm';
-
-    var items = [
-      { emoji: '💉', name: isPump ? 'Pump supplies' : 'Insulin pen + needles', essential: true, cat: 'insulin' },
-      { emoji: '🩸', name: isCGM ? 'CGM receiver/phone' : 'Blood glucose meter + strips', essential: true, cat: 'monitor' },
-      { emoji: '🍬', name: 'Glucose tabs', essential: true, cat: 'low-treatment' },
-      { emoji: '🧃', name: 'Juice box', essential: true, cat: 'low-treatment' },
-      { emoji: '🥪', name: 'Snacks', essential: true, cat: 'food' },
-      { emoji: '💧', name: 'Water bottle', essential: true, cat: 'hydration' },
-      { emoji: '🪪', name: 'Medical ID', essential: true, cat: 'safety' },
-      { emoji: '🔋', name: 'Extra batteries / charger', essential: false, cat: 'backup' },
-      { emoji: '📋', name: 'Emergency contact card', essential: false, cat: 'safety' },
-      { emoji: isPump ? '🔧' : '💉', name: isPump ? 'Backup infusion sets' : 'Extra pen needles', essential: false, cat: 'backup' },
-      { emoji: '❄️', name: 'Insulin cool pack', essential: false, cat: 'storage' }
+    const tier = opts.tier || 1;
+    const isPump = state.player.device.insulin === 'pump', isCGM = state.player.device.bgMonitor === 'cgm';
+    const items = [
+      { emoji: isPump ? '🎛️' : '🖊️', name: isPump ? 'Pump supplies' : 'Insulin pen + needles', essential: true, hint: 'How will you take your mealtime insulin?' },
+      { emoji: '🩸', name: isCGM ? 'Phone or receiver for your CGM' : 'Meter + test strips', essential: true, hint: 'How will you check your BG?' },
+      { emoji: '🍬', name: 'Glucose tabs', essential: true, hint: 'What will you use if you go low?' },
+      { emoji: '🥪', name: 'Snacks', essential: true, hint: 'You might get hungry, or need a snack after a low.' },
+      { emoji: '💧', name: 'Water bottle', essential: true, hint: 'Something to drink, especially if BG runs high.' },
+      { emoji: '🪪', name: 'Medical ID', essential: true, hint: 'Something that tells people you have T1D if you can\'t.' },
+      { emoji: '🧃', name: 'Juice box', essential: false },
+      { emoji: '🔋', name: 'Charger / spare batteries', essential: false },
+      { emoji: '📋', name: 'Emergency contact card', essential: false },
+      { emoji: isPump ? '🩹' : '🖊️', name: isPump ? 'Spare infusion set' : 'Spare pen needles', essential: false },
+      { emoji: '❄️', name: 'Insulin cool pack', essential: false }
     ];
-    if (tier >= 2) {
-      items.push({ emoji: '📝', name: 'Doctor\'s note / letter', essential: false, cat: 'travel' });
-      items.push({ emoji: '🧊', name: 'Insulated bag', essential: false, cat: 'storage' });
-    }
-    var distractors = [
-      { emoji: '🎮', name: 'Video game', essential: false, cat: 'distractor' },
-      { emoji: '🧸', name: 'Stuffed animal', essential: false, cat: 'distractor' },
-      { emoji: '🕶️', name: 'Sunglasses', essential: false, cat: 'distractor' },
-      { emoji: '📚', name: 'Comic book', essential: false, cat: 'distractor' }
-    ];
-    var shuffledDistractors = distractors.sort(function() { return Math.random() - 0.5; }).slice(0, 2);
-    var allItems = items.concat(shuffledDistractors).sort(function() { return Math.random() - 0.5; });
-    var packed = {};
-
-    renderMGPanel(
-      '<h2>🎒 Pack Your Bag</h2>' +
-      '<p class="mg-subtitle">Tap everything you need for ' + (tier <= 1 ? 'a day at school' : tier <= 2 ? 'a sleepover' : 'a day trip') + '.</p>' +
-      '<div class="mg-options-grid" id="mg-pack-items">' +
-        allItems.map(function(item, i) {
-          return '<div class="mg-option-card" data-idx="' + i + '" style="cursor:pointer;">' +
-            '<span class="mg-opt-emoji">' + item.emoji + '</span>' +
-            '<span class="mg-opt-name">' + item.name + '</span>' +
-          '</div>';
-        }).join('') +
-      '</div>' +
-      '<div style="text-align:center;margin:12px 0;">' +
-        '<div id="mg-pack-count" style="font-size:14px;color:var(--text-secondary);margin-bottom:8px;">Packed: 0 items</div>' +
-        '<button class="mg-action-btn" id="mg-pack-done">🎒 Done Packing</button>' +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
-
-    setTimeout(function() {
-      document.querySelectorAll('#mg-pack-items .mg-option-card').forEach(function(card) {
-        card.addEventListener('click', function() {
-          var idx = parseInt(card.dataset.idx, 10);
-          if (packed[idx]) {
-            delete packed[idx];
-            card.style.border = '';
-            card.style.background = '';
-          } else {
-            packed[idx] = true;
-            card.style.border = '2px solid var(--zone-green)';
-            card.style.background = 'rgba(76,175,80,0.1)';
-          }
-          document.getElementById('mg-pack-count').textContent = 'Packed: ' + Object.keys(packed).length + ' items';
+    if (tier >= 2) items.push({ emoji: '📝', name: 'Letter from your diabetes team', essential: false });
+    const fun = shuffle([
+      { emoji: '🎮', name: 'Video game' }, { emoji: '🧸', name: 'Stuffed animal' }, { emoji: '🕶️', name: 'Sunglasses' },
+      { emoji: '📚', name: 'Comic book' }, { emoji: '⚽', name: 'Soccer ball' }, { emoji: '🎨', name: 'Sketchbook' }
+    ]).slice(0, 2).map(f => Object.assign(f, { essential: false, fun: true }));
+    const all = shuffle(items.concat(fun));
+    const packed = {};
+    renderMGPanel('<h2>🎒 Pack Your Bag</h2><p class="mg-subtitle">Pack for ' + (tier <= 1 ? 'a day at school' : tier <= 2 ? 'a day out' : 'a trip') + '.</p>' +
+      '<div class="mg-options-grid" id="mg-pack-items">' + all.map((it, i) =>
+        '<div class="mg-option-card" data-idx="' + i + '"><span class="mg-opt-emoji">' + it.emoji + '</span><span class="mg-opt-name">' + it.name + '</span></div>').join('') + '</div>' +
+      '<div class="bag-line">🎒 <span id="mg-pack-bag"></span></div>' +
+      '<div style="text-align:center;margin:12px 0;"><button class="mg-action-btn" id="mg-pack-done">✅ Done packing</button></div>' +
+      '<div id="mg-pack-fb"></div><div id="mg-result"></div>');
+    setTimeout(() => {
+      const bagEl = document.getElementById('mg-pack-bag');
+      const drawBag = () => { bagEl.textContent = Object.keys(packed).map(i => all[i].emoji).join(' ') || '(empty)'; };
+      drawBag();
+      document.querySelectorAll('#mg-pack-items .mg-option-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const i = card.dataset.idx;
+          if (packed[i]) { delete packed[i]; card.classList.remove('packed'); } else { packed[i] = true; card.classList.add('packed'); }
+          drawBag();
         });
       });
-
-      document.getElementById('mg-pack-done').addEventListener('click', function() {
-        var essentialsMissed = [];
-        var extrasGot = 0;
-        allItems.forEach(function(item, i) {
-          if (item.essential && !packed[i]) essentialsMissed.push(item.name);
-          if (!item.essential && item.cat !== 'distractor' && packed[i]) extrasGot++;
-        });
-
-        var stars;
-        if (essentialsMissed.length === 0 && extrasGot >= 2) stars = 3;
-        else if (essentialsMissed.length === 0) stars = 2;
-        else if (essentialsMissed.length <= 1) stars = 1;
-        else stars = 0;
-
-        var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        var headline = stars === 3 ? 'Perfectly packed!' : stars === 2 ? 'Got all the essentials.' : stars === 1 ? 'Almost there.' : 'Missing important items.';
-        var msg = headline;
-        if (essentialsMissed.length > 0) msg += '<br><span style="color:var(--zone-red);">Forgot: ' + essentialsMissed.join(', ') + '</span>';
-        if (extrasGot > 0) msg += '<br><small>💡 Nice touch bringing backup supplies.</small>';
-
-        var resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', function() { onComplete({ stars: stars, summary: msg }); });
+      let hints = 0;
+      document.getElementById('mg-pack-done').addEventListener('click', () => {
+        const missing = all.filter((it, i) => it.essential && !packed[i]);
+        const fb = document.getElementById('mg-pack-fb');
+        if (missing.length) {
+          hints++;
+          fb.innerHTML = '<p class="quiz-feedback try">🤖 Almost! ' + missing.length + ' important thing' + (missing.length > 1 ? 's are' : ' is') + ' still at home. Hint: ' + missing[0].hint + '</p>';
+          return;
+        }
+        document.getElementById('mg-pack-done').disabled = true;
+        fb.innerHTML = '';
+        const extras = all.filter((it, i) => !it.essential && !it.fun && packed[i]).length;
+        const funPacked = all.filter((it, i) => it.fun && packed[i]);
+        let msg = '<p><strong>All the important stuff is packed!</strong></p>';
+        if (extras) msg += '<p><small>Nice extras too: backups make surprises easier.</small></p>';
+        if (funPacked.length) msg += '<p><small>And you brought the ' + funPacked.map(f => f.name.toLowerCase()).join(' and ') + '. Fun counts too!</small></p>';
+        mgFinish(msg, () => onComplete({ stars: hints === 0 ? 3 : 2, summary: 'Packed' }), '🎒');
       });
     }, 50);
   }
 };
 
 // ---- Glucose Roller ----
-// Keep BG in range by using carb/insulin pickups. Arrow keys to steer.
+// Abstract "feel the momentum" game. The ball is BG; taps nudge it.
 MiniGames['Glucose Roller'] = {
+  intro: { emoji: '🎱', how: [
+    'This is a pretend game about how BG moves. The ball is your BG.',
+    'The ball drifts on its own, and once it starts moving it keeps going that way.',
+    'Tap <strong>⬆️ Up</strong> (like eating carbs) or <strong>⬇️ Down</strong> (like insulin working) to nudge it. Arrow keys work too.',
+    'Try to keep it in the green band (5 to 10). Small, early nudges work best. It lasts about 15 seconds.'] },
   play: function(opts, onComplete) {
-    var bg = 7.0;
-    var velocity = 0;
-    var timeInGreen = 0;
-    var totalTicks = 0;
-    var maxTicks = 300;
-    var finished = false;
-    var pickups = [];
-    var nextPickup = 30;
-
-    renderMGPanel(
-      '<h2>🎱 Glucose Roller</h2>' +
-      '<p class="mg-subtitle">Keep the ball in the green zone. Use ⬆️ (carbs: BG up) and ⬇️ (insulin: BG down).</p>' +
-      '<div style="position:relative;max-width:320px;margin:0 auto;height:300px;border:2px solid var(--border);border-radius:8px;overflow:hidden;background:linear-gradient(to bottom, rgba(244,67,54,0.15) 0%, rgba(255,235,59,0.1) 15%, rgba(76,175,80,0.15) 30%, rgba(76,175,80,0.15) 70%, rgba(255,235,59,0.1) 85%, rgba(244,67,54,0.15) 100%);" id="mg-roller-field">' +
-        '<div style="position:absolute;left:0;right:0;top:28%;height:1px;border-top:1px dashed var(--zone-green);opacity:0.5;"></div>' +
-        '<div style="position:absolute;left:0;right:0;top:72%;height:1px;border-top:1px dashed var(--zone-green);opacity:0.5;"></div>' +
-        '<div id="mg-roller-ball" style="position:absolute;left:50%;transform:translateX(-50%);font-size:28px;transition:top 0.05s;">⚽</div>' +
-        '<div id="mg-roller-pickups" style="position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;"></div>' +
-      '</div>' +
-      '<div style="text-align:center;margin:8px 0;">' +
-        '<span style="font-size:14px;">BG: <strong id="mg-roller-bg">7.0</strong></span> | ' +
-        '<span style="font-size:14px;">Time in range: <strong id="mg-roller-tir">0%</strong></span>' +
-      '</div>' +
-      '<div style="text-align:center;margin:8px 0;">' +
-        '<button class="mg-action-btn" id="mg-roller-up" style="margin:0 4px;">⬆️ Carbs</button>' +
-        '<button class="mg-action-btn" id="mg-roller-down" style="margin:0 4px;">⬇️ Insulin</button>' +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
-
-    setTimeout(function() {
-      var ballEl = document.getElementById('mg-roller-ball');
-      var bgEl = document.getElementById('mg-roller-bg');
-      var tirEl = document.getElementById('mg-roller-tir');
-
-      function bgToY(val) {
-        var clamped = Math.max(2, Math.min(18, val));
-        return ((18 - clamped) / 16) * 260 + 10;
-      }
-
-      function applyForce(dir) {
-        if (finished) return;
-        velocity += dir * 0.15;
-      }
-
-      document.getElementById('mg-roller-up').addEventListener('click', function() { applyForce(1); });
-      document.getElementById('mg-roller-down').addEventListener('click', function() { applyForce(-1); });
-
-      document.addEventListener('keydown', function handler(e) {
-        if (finished) { document.removeEventListener('keydown', handler); return; }
-        if (e.key === 'ArrowUp') { applyForce(1); e.preventDefault(); }
-        if (e.key === 'ArrowDown') { applyForce(-1); e.preventDefault(); }
-      });
-
-      var interval = setInterval(function() {
-        if (finished) { clearInterval(interval); return; }
-        totalTicks++;
-        velocity += (Math.random() - 0.52) * 0.06;
-        velocity *= 0.97;
-        bg += velocity * 0.1;
-        bg = Math.max(2, Math.min(18, bg));
-
-        if (bg >= 5 && bg <= 12) timeInGreen++;
-
-        ballEl.style.top = bgToY(bg) + 'px';
+    let bg = 7.0, vel = 0, inGreen = 0, ticks = 0, done = false;
+    const MAX = 300, H = 280;
+    const y = v => ((18 - Math.max(2, Math.min(18, v))) / 16) * (H - 40) + 10;
+    renderMGPanel('<h2>🎱 Glucose Roller</h2><p class="mg-subtitle">Keep the ball in the green band.</p>' +
+      '<div class="roller-field" style="height:' + H + 'px"><div class="roller-green" style="top:' + y(10) + 'px;height:' + (y(5) - y(10)) + 'px"></div>' +
+      '<div class="roller-ball" id="mg-roller-ball">⚽</div></div>' +
+      '<div style="text-align:center;margin:8px 0;">BG <strong id="mg-roller-bg">7.0</strong></div>' +
+      '<div class="roller-btns"><button class="mg-action-btn big" id="mg-roller-up">⬆️ Up</button><button class="mg-action-btn big" id="mg-roller-down">⬇️ Down</button></div>' +
+      '<div class="roller-progress"><div id="mg-roller-prog"></div></div><div id="mg-result"></div>');
+    setTimeout(() => {
+      const ball = document.getElementById('mg-roller-ball'), bgEl = document.getElementById('mg-roller-bg'), prog = document.getElementById('mg-roller-prog');
+      if (!ball) return;
+      const nudge = d => { if (!done) vel += d * 0.15; };
+      document.getElementById('mg-roller-up').addEventListener('click', () => nudge(1));
+      document.getElementById('mg-roller-down').addEventListener('click', () => nudge(-1));
+      const keys = e => {
+        if (done) return;
+        if (e.key === 'ArrowUp') { nudge(1); e.preventDefault(); }
+        if (e.key === 'ArrowDown') { nudge(-1); e.preventDefault(); }
+      };
+      document.addEventListener('keydown', keys);
+      const loop = setInterval(() => {
+        if (!document.getElementById('mg-roller-ball')) { clearInterval(loop); document.removeEventListener('keydown', keys); return; }
+        ticks++;
+        vel += (Math.random() - 0.52) * 0.06;
+        vel *= 0.97;
+        bg = Math.max(2, Math.min(18, bg + vel * 0.1));
+        if (inRange(bg)) inGreen++;
+        ball.style.top = (y(bg) - 14) + 'px';
         bgEl.textContent = bg.toFixed(1);
-        bgEl.style.color = bg >= 5 && bg <= 12 ? 'var(--zone-green)' : bg < 4 || bg > 15 ? 'var(--zone-red)' : 'var(--zone-yellow)';
-        tirEl.textContent = Math.round((timeInGreen / totalTicks) * 100) + '%';
-
-        if (totalTicks >= maxTicks) {
-          finished = true;
-          clearInterval(interval);
-          var pct = Math.round((timeInGreen / totalTicks) * 100);
-          var stars = pct >= 80 ? 3 : pct >= 60 ? 2 : pct >= 40 ? 1 : 0;
-          var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-          var headline = stars === 3 ? 'Smooth rolling!' : stars === 2 ? 'Decent control.' : stars === 1 ? 'Bumpy ride.' : 'Wild swings.';
-          var msg = headline + ' Time in range: <strong>' + pct + '%</strong>.' +
-            '<br><small>💡 BG has momentum. Small, early corrections work better than big, late ones.</small>';
-          var resDiv = document.getElementById('mg-result');
-          resDiv.className = 'mg-result ' + cls;
-          resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-            (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-            '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-          document.getElementById('mg-continue').addEventListener('click', function() { onComplete({ stars: stars, summary: msg }); });
+        bgEl.style.color = inRange(bg) ? 'var(--zone-green)' : (bg < 4 || bg > 14) ? 'var(--zone-red)' : '#d39e00';
+        prog.style.width = (ticks / MAX * 100) + '%';
+        if (ticks >= MAX) {
+          done = true; clearInterval(loop); document.removeEventListener('keydown', keys);
+          const p = Math.round(inGreen / ticks * 100);
+          mgFinish('<p><strong>' + (p >= 70 ? 'Smooth rolling!' : p >= 40 ? 'Nice work!' : 'That ball has a mind of its own!') + '</strong> The ball was in the green ' + p + '% of the time.</p>' +
+            '<p><small>💡 BG has momentum. Small, early nudges work better than big, late ones. Real BG works a bit like that too.</small></p>',
+            () => onComplete({ stars: p >= 70 ? 3 : p >= 40 ? 2 : 1, summary: p + '%' }), '🎱');
         }
       }, 50);
     }, 50);
@@ -2217,274 +2395,206 @@ MiniGames['Glucose Roller'] = {
 };
 
 // ---- Portion Estimator ----
-// See a plate described with emoji, estimate total carbs with a slider.
 MiniGames['Portion Estimator'] = {
+  intro: { emoji: '👁️', how: [
+    'You\'ll see a plate of food. Slide to estimate the total carbs.',
+    'Use your hand as a guide: a fist is about 1 cup.',
+    'No timer, and close is great.'] },
   play: function(opts, onComplete) {
-    var tier = opts.tier || 1;
-    var plates = [
-      { items: [{ emoji: '🍚', desc: '~1.5 cups rice', carbs: 67 }, { emoji: '🍗', desc: 'Chicken thigh', carbs: 0 }, { emoji: '🥬', desc: 'Side of veggies', carbs: 8 }], total: 75, hint: 'Your fist = about 1 cup. That rice looks like 1.5 fists.' },
-      { items: [{ emoji: '🍝', desc: 'Big bowl of pasta', carbs: 60 }, { emoji: '🧀', desc: 'Parmesan on top', carbs: 1 }, { emoji: '🥗', desc: 'Side salad', carbs: 5 }], total: 66, hint: 'A big bowl of pasta is often 1.5 cups or more.' },
-      { items: [{ emoji: '🥞', desc: '3 pancakes', carbs: 45 }, { emoji: '🍯', desc: 'Syrup drizzle', carbs: 15 }, { emoji: '🍓', desc: 'Strawberries', carbs: 6 }], total: 66, hint: 'Each pancake is about 15g. Syrup adds fast carbs.' },
-      { items: [{ emoji: '🍕', desc: '2 slices of pizza', carbs: 60 }, { emoji: '🥤', desc: 'Glass of pop', carbs: 39 }], total: 99, hint: 'Each pizza slice is about 30g. Pop is pure sugar.' },
-      { items: [{ emoji: '🌮', desc: '3 soft tacos', carbs: 45 }, { emoji: '🫘', desc: 'Refried beans', carbs: 20 }, { emoji: '🧀', desc: 'Cheese', carbs: 1 }], total: 66, hint: 'Each flour tortilla is about 15g.' },
-      { items: [{ emoji: '🥣', desc: 'Bowl of cereal', carbs: 35 }, { emoji: '🥛', desc: 'Milk', carbs: 13 }, { emoji: '🍌', desc: 'Banana on top', carbs: 27 }], total: 75, hint: 'Cereal + milk + fruit adds up fast.' },
-      { items: [{ emoji: '🍔', desc: 'Burger with bun', carbs: 35 }, { emoji: '🍟', desc: 'Medium fries', carbs: 44 }, { emoji: '🥤', desc: 'Small juice', carbs: 28 }], total: 107, hint: 'The bun, fries, and drink are ALL carbs.' },
-      { items: [{ emoji: '🥪', desc: 'PB&J sandwich', carbs: 45 }, { emoji: '🍎', desc: 'Apple', carbs: 19 }, { emoji: '🥛', desc: 'Glass of milk', carbs: 13 }], total: 77, hint: 'Two slices of bread + jam = ~35g. PB adds very little.' }
+    const plates = [
+      { items: [['🍚', 'About 1½ cups of rice', 67], ['🍗', 'Chicken thigh', 0], ['🥦', 'Veggies', 8]], hint: 'A fist is about 1 cup. That rice is about 1½ fists.' },
+      { items: [['🍝', 'Big bowl of pasta', 60], ['🧀', 'Parmesan', 1], ['🥗', 'Side salad', 5]], hint: 'A big bowl of pasta is often 1½ cups or more.' },
+      { items: [['🥞', '3 pancakes', 45], ['🍯', 'Syrup', 15], ['🍓', 'Strawberries', 6]], hint: 'Each pancake is about 15g. Syrup adds fast sugar.' },
+      { items: [['🍕', '2 slices of pizza', 60], ['🥛', 'Glass of milk', 12]], hint: 'Each slice is about 30g.' },
+      { items: [['🌮', '3 soft tacos', 45], ['🫘', 'Refried beans', 20], ['🧀', 'Cheese', 1]], hint: 'Each small flour tortilla is about 15g.' },
+      { items: [['🥣', 'Bowl of cereal', 35], ['🥛', 'Milk', 13], ['🍌', 'Banana', 27]], hint: 'Cereal, milk and fruit all add up.' },
+      { items: [['🍔', 'Burger with bun', 35], ['🍟', 'Medium fries', 44], ['💧', 'Water', 0]], hint: 'The bun and fries are where the carbs are.' },
+      { items: [['🥪', 'Sandwich', 35], ['🍎', 'Apple', 19], ['🥛', 'Milk', 13]], hint: 'Two slices of bread are about 30g.' },
+      { items: [['🍛', 'Curry', 10], ['🍚', '1 cup rice', 45], ['🫓', 'Small naan', 25]], hint: 'Rice and bread together add up fast.' },
+      { items: [['🥟', '6 dumplings', 30], ['🥢', 'Small bowl of noodles', 30], ['🥦', 'Bok choy', 3]], hint: 'Dumpling wrappers and noodles are both dough.' }
     ];
-    var plate = plates[Math.floor(Math.random() * plates.length)];
-
-    renderMGPanel(
-      '<h2>👁️ Portion Estimator</h2>' +
-      '<p class="mg-subtitle">Look at this plate and estimate the total carbs.</p>' +
-      '<div style="background:white;border-radius:50%;width:220px;height:220px;margin:16px auto;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;border:3px solid var(--border);gap:4px;">' +
-        plate.items.map(function(item) {
-          return '<div style="text-align:center;"><span style="font-size:36px;">' + item.emoji + '</span><div style="font-size:11px;color:#333;">' + item.desc + '</div></div>';
-        }).join('') +
-      '</div>' +
-      '<div style="text-align:center;font-size:13px;color:var(--text-secondary);margin-bottom:8px;">' +
-        '<strong>Handy references:</strong> Your fist = 1 cup | Your palm = 3oz protein | Your thumb = 1 tbsp' +
-      '</div>' +
-      '<div class="mg-slider-row">' +
-        '<label>Estimate:</label>' +
-        '<input type="range" id="mg-portion-slider" min="0" max="150" step="5" value="50">' +
-        '<span class="mg-slider-value" id="mg-portion-val">50g</span>' +
-      '</div>' +
-      '<div style="text-align:center;margin-top:12px;">' +
-        '<button class="mg-action-btn" id="mg-portion-submit">Check Estimate</button>' +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
-
-    setTimeout(function() {
-      var slider = document.getElementById('mg-portion-slider');
-      var valEl = document.getElementById('mg-portion-val');
-      slider.addEventListener('input', function() { valEl.textContent = slider.value + 'g'; });
-      document.getElementById('mg-portion-submit').addEventListener('click', function() {
-        var guess = parseInt(slider.value, 10);
-        var diff = Math.abs(guess - plate.total);
-        var stars = starsFromDiff(diff, [10, 20, 30]);
-        var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        var headline = stars === 3 ? 'Great eye!' : stars === 2 ? 'Close!' : stars === 1 ? 'In the ballpark.' : 'Off by quite a bit.';
-        var breakdown = plate.items.map(function(item) { return item.desc + ' ' + item.carbs + 'g'; }).join(' + ');
-        var msg = headline + ' Actual: <strong>' + plate.total + 'g</strong> (you said ' + guess + 'g, off by ' + diff + 'g).' +
-          '<br><small style="color:var(--text-secondary);">' + breakdown + '</small>' +
-          '<br><small>💡 ' + plate.hint + '</small>';
-        var resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', function() { onComplete({ stars: stars, summary: msg }); });
+    const pl = pick(plates);
+    const total = pl.items.reduce((a, it) => a + it[2], 0);
+    renderMGPanel('<h2>👁️ Portion Estimator</h2><p class="mg-subtitle">Estimate the total carbs on this plate.</p>' +
+      '<div class="plate big">' + pl.items.map(it => '<div class="plate-item"><span>' + it[0] + '</span><small>' + it[1] + '</small></div>').join('') + '</div>' +
+      '<p class="hand-ref">✊ fist ≈ 1 cup · ✋ palm ≈ a serving of meat · 👍 thumb ≈ 1 tbsp</p>' +
+      '<div class="mg-slider-row"><label for="mg-portion-slider">Estimate:</label><input type="range" id="mg-portion-slider" min="0" max="150" step="5" value="50"><span class="mg-slider-value" id="mg-portion-val">50g</span></div>' +
+      '<div style="text-align:center;margin-top:12px;"><button class="mg-action-btn" id="mg-portion-submit">Check</button></div><div id="mg-result"></div>');
+    setTimeout(() => {
+      const sl = document.getElementById('mg-portion-slider'), val = document.getElementById('mg-portion-val');
+      sl.addEventListener('input', () => { val.textContent = sl.value + 'g'; });
+      document.getElementById('mg-portion-submit').addEventListener('click', () => {
+        const g = parseInt(sl.value, 10), diff = Math.abs(g - total);
+        document.getElementById('mg-portion-submit').disabled = true;
+        const head = diff <= 10 ? 'Great eye!' : diff <= 25 ? 'Close!' : 'Good try!';
+        mgFinish('<p><strong>' + head + '</strong> You said ' + g + 'g. The plate has about <strong>' + total + 'g</strong>.</p>' +
+          '<p><small>' + pl.items.map(it => it[0] + ' ' + it[2] + 'g').join(' + ') + '</small></p><p><small>💡 ' + pl.hint + '</small></p>',
+          () => onComplete({ stars: starsFromDiff(diff, [10, 25, 40]), summary: head }), diff <= 25 ? '👁️' : '👍');
       });
     }, 50);
   }
 };
 
 // ---- Sick Day Protocol ----
-// Step through the correct management protocol for a sick day.
+// Teaches what to watch and when to get help. Insulin decisions are "your sick day plan".
 MiniGames['Sick Day Protocol'] = {
+  intro: { emoji: '🤒', how: [
+    'You\'re sick. A few questions about what to do.',
+    'Pick an answer. If it\'s not the best one, Pip explains and you can pick again.',
+    'Your diabetes team gives you a sick day plan. This game is about the big ideas.'] },
   play: function(opts, onComplete) {
-    var steps = [
-      {
-        situation: '🤒 You wake up feeling awful. Fever, nausea, body aches. Your BG reads <strong>16.5</strong>.',
-        question: 'What do you do first?',
-        options: [
-          { text: '🩸 Check for ketones', correct: true, feedback: 'Correct! When BG is high and you\'re sick, always check ketones.' },
-          { text: '💉 Give a big correction dose', correct: false, feedback: 'Hold on. Check ketones first. High BG + illness could mean ketones, and that changes what you do.' },
-          { text: '😴 Go back to sleep', correct: false, feedback: 'Not safe. High BG when sick needs attention right away.' }
-        ]
-      },
-      {
-        situation: '⚠️ Ketone check: <strong>Moderate ketones detected.</strong>',
-        question: 'What next?',
-        options: [
-          { text: '💧 Drink water + give correction dose', correct: true, feedback: 'Yes! Fluids help flush ketones. A correction dose helps bring BG down.' },
-          { text: '🍕 Eat something to feel better', correct: false, feedback: 'Eating adds carbs when BG is already high. Fluids first, correction first.' },
-          { text: '⏰ Wait and recheck in a few hours', correct: false, feedback: 'Moderate ketones need action now, not later. Waiting can lead to DKA.' }
-        ]
-      },
-      {
-        situation: '💧 You\'ve had water and given a correction. It\'s been 2 hours.',
-        question: 'Time to recheck. What are you checking?',
-        options: [
-          { text: '🩸 BG and ketones both', correct: true, feedback: 'Correct! You need to see if BG came down AND if ketones improved.' },
-          { text: '🩸 Just BG', correct: false, feedback: 'BG matters, but ketones are the bigger danger right now. Check both.' },
-          { text: '🤷 Feel fine-ish, skip the check', correct: false, feedback: 'Never skip a recheck during a sick day. Things can change fast.' }
-        ]
-      },
-      {
-        situation: '📊 Recheck: BG is <strong>13.0</strong> (coming down). Ketones: <strong>trace</strong> (improving).',
-        question: 'Things are improving. What now?',
-        options: [
-          { text: '💧 Keep sipping fluids, eat small amounts if you can, recheck in 2 hours', correct: true, feedback: 'Perfect. Stay hydrated, small carbs if tolerated, and keep monitoring.' },
-          { text: '🎉 All clear, go back to normal', correct: false, feedback: 'Not yet. Ketones are still present and you\'re still sick. Keep monitoring.' },
-          { text: '📞 Call 911', correct: false, feedback: 'Not needed right now. Things are improving. But if ketones had gotten WORSE, calling your diabetes team would be the right move.' }
-        ]
-      },
-      {
-        situation: '❓ At what point should you call your diabetes team or go to the ER?',
-        question: 'Which of these is a reason to call for help?',
-        options: [
-          { text: '🚨 Ketones stay high or worsen after 2 corrections, or you can\'t keep fluids down', correct: true, feedback: 'Exactly. Persistent high ketones or vomiting can lead to DKA. That needs medical help.' },
-          { text: '🤒 You still have a fever', correct: false, feedback: 'A fever alone isn\'t an emergency for T1D, as long as BG and ketones are manageable.' },
-          { text: '😢 You feel tired', correct: false, feedback: 'Feeling tired when sick is normal. The red flags are: high ketones that won\'t come down, vomiting, confusion, or fruity-smelling breath.' }
-        ]
-      }
+    const steps = [
+      { art: '🤒 🛏️', situation: 'You wake up with a fever and an upset stomach. Your BG is 16.5.', q: 'What\'s a good first step?',
+        choices: [
+          { text: '🙋 Tell a grown-up and check for ketones', correct: true, feedback: 'Yes. Being sick plus a high BG means it\'s time to check ketones, with a grown-up helping.' },
+          { text: '😴 Go back to sleep and check later', correct: false, feedback: 'Being sick can make BG and ketones go up fast. It needs attention now.' },
+          { text: '🙈 Don\'t tell anyone', correct: false, feedback: 'Sick days are a team job. Tell a grown-up so they can help.' }
+        ] },
+      { art: '🧪 ⚠️', situation: 'Ketone check: <strong>moderate</strong>.', q: 'What now?',
+        choices: [
+          { text: '📋 Follow the sick day plan from my diabetes team, and drink water', correct: true, feedback: 'Right. Your sick day plan tells you and your grown-up what to do about insulin. Sipping water helps too.' },
+          { text: '🍕 Eat a big meal to feel better', correct: false, feedback: 'Your stomach and your BG need gentle care right now. Follow your sick day plan.' },
+          { text: '⏰ Ignore it for a few hours', correct: false, feedback: 'Ketones need action. Follow your sick day plan now.' }
+        ] },
+      { art: '⏱️ 🩸 🧪', situation: 'A couple of hours have passed.', q: 'What do you check?',
+        choices: [
+          { text: '🩸🧪 BG and ketones both', correct: true, feedback: 'Yes. On sick days you keep an eye on both, more often than usual.' },
+          { text: '🩸 Just BG', correct: false, feedback: 'BG matters, but ketones are important on sick days too. Check both.' },
+          { text: '🤷 Nothing, you feel a bit better', correct: false, feedback: 'Keep checking on sick days. Things can change quickly.' }
+        ] },
+      { art: '🥣 🧃', situation: 'You don\'t feel like eating.', q: 'What helps?',
+        choices: [
+          { text: '🥣 Small sips and easy foods, if you can', correct: true, feedback: 'Yes. Your body still needs fluids and some carbs. Your sick day plan may list easy options.' },
+          { text: '🚫 Nothing at all until tomorrow', correct: false, feedback: 'Going without fluids can make things worse. Small sips help a lot.' },
+          { text: '🍬 Candy only', correct: false, feedback: 'Candy alone won\'t help you get better. Fluids and gentle foods are better.' }
+        ] },
+      { art: '📞 🏥', situation: 'Knowing when to get help is the most important part.', q: 'Which one means call your diabetes team or get medical help?',
+        choices: [
+          { text: '🚨 Throwing up and can\'t keep fluids down, or ketones staying high', correct: true, feedback: 'Exactly. Those are signs to get help right away. Your grown-up makes the call.' },
+          { text: '🤧 A runny nose', correct: false, feedback: 'A runny nose alone isn\'t an emergency. Watch for throwing up, high ketones, or feeling very unwell.' },
+          { text: '😴 Feeling sleepy', correct: false, feedback: 'Being sleepy when sick is normal. Watch for throwing up, high ketones, or trouble breathing.' }
+        ] }
     ];
-
-    var currentStep = 0;
-    var correctCount = 0;
-
-    function renderStep() {
-      if (currentStep >= steps.length) {
-        var stars = correctCount === 5 ? 3 : correctCount >= 4 ? 2 : correctCount >= 3 ? 1 : 0;
-        var cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        var headline = stars === 3 ? 'Perfect protocol!' : stars === 2 ? 'Strong knowledge.' : stars === 1 ? 'Getting there.' : 'Review the sick day steps.';
-        var msg = headline + ' Got ' + correctCount + ' out of ' + steps.length + ' steps right.' +
-          '<br><small>💡 Sick day basics: check ketones, drink water, correct BG, recheck every 2 hours, call for help if ketones won\'t come down.</small>';
-        var resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', function() { onComplete({ stars: stars, summary: msg }); });
-        return;
-      }
-      var step = steps[currentStep];
-      var stepDiv = document.getElementById('mg-sick-step');
-      stepDiv.innerHTML = '<div style="background:white;border:2px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;color:#333;">' +
-        '<p>' + step.situation + '</p>' +
-        '<p style="font-weight:bold;">' + step.question + '</p>' +
-        '</div>' +
-        '<div class="mg-options-grid">' +
-          step.options.map(function(opt, i) {
-            return '<div class="mg-option-card" data-idx="' + i + '" style="cursor:pointer;text-align:left;padding:12px;">' +
-              '<span>' + opt.text + '</span></div>';
-          }).join('') +
-        '</div>' +
-        '<div id="mg-step-feedback"></div>';
-
-      setTimeout(function() {
-        stepDiv.querySelectorAll('.mg-option-card').forEach(function(card) {
-          card.addEventListener('click', function() {
-            var idx = parseInt(card.dataset.idx, 10);
-            var opt = step.options[idx];
-            stepDiv.querySelectorAll('.mg-option-card').forEach(function(c) { c.style.pointerEvents = 'none'; });
-            card.style.border = opt.correct ? '2px solid var(--zone-green)' : '2px solid var(--zone-red)';
-            if (opt.correct) correctCount++;
-            var fb = document.getElementById('mg-step-feedback');
-            fb.innerHTML = '<p style="margin-top:10px;color:' + (opt.correct ? 'var(--zone-green)' : 'var(--zone-red)') + ';">' +
-              (opt.correct ? '✓ ' : '✗ ') + opt.feedback + '</p>' +
-              '<button class="mg-action-btn" id="mg-next-step" style="margin-top:8px;">Next</button>';
-            currentStep++;
-            document.getElementById('mg-next-step').addEventListener('click', renderStep);
-          });
-        });
-      }, 30);
-    }
-
-    renderMGPanel(
-      '<h2>🤒 Sick Day Protocol</h2>' +
-      '<p class="mg-subtitle">You\'re sick and your BG is high. Step through the protocol.</p>' +
-      '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">Step ' + (currentStep + 1) + ' of ' + steps.length + '</div>' +
-      '<div id="mg-sick-step"></div>' +
-      '<div id="mg-result"></div>'
-    );
-    setTimeout(renderStep, 50);
+    runSteps('🤒 Sick Day Protocol', 'Pick an answer. You can change it any time.', steps,
+      '<p><strong>You know the big ideas!</strong> Tell a grown-up, check BG and ketones, follow your sick day plan, sip fluids, and know when to get help.</p>',
+      onComplete);
   }
 };
 
 // ---- Mini-game launcher ----
-// Plays a mini-game, then renders nextPassage. Awards Beta Cell on first play.
+function showMiniGameIntro(name, intro, onStart) {
+  renderMGPanel('<div class="mg-intro"><div class="mg-intro-emoji">' + intro.emoji + '</div><h2>' + name + '</h2>' +
+    '<ul class="mg-how">' + intro.how.map(h => '<li>' + h + '</li>').join('') + '</ul>' +
+    '<button class="mg-action-btn big" id="mg-start">▶ Start</button></div>');
+  setTimeout(() => document.getElementById('mg-start').addEventListener('click', onStart), 30);
+}
+
 function playMiniGame(gameName, opts, nextPassage) {
   const game = MiniGames[gameName];
   if (!game) { renderPassage(nextPassage); return; }
-  game.play(opts || {}, (result) => {
-    // AUDIO: Play result jingle based on stars
-    const bcId = miniGameBetaCells[gameName];
-    if (bcId && collectBetaCell(bcId)) {
-      setTimeout(() => showBetaCellNotification(betaCellMap[bcId].name, betaCellMap[bcId].cat), 400);
-    }
-    if (result.stars === 3) updateConfidence(5);
-    else if (result.stars === 2) updateConfidence(3);
-    else if (result.stars === 1) updateConfidence(1);
-    else updateConfidence(-2);
-    tick(0.25); advanceTime(0.25);
-    renderPassage(nextPassage);
-  });
+  opts = opts || {};
+  state.flags.seenGames = state.flags.seenGames || {};
+  const run = () => {
+    state.flags.seenGames[gameName] = true;
+    game.play(opts, (result) => {
+      // AUDIO: Play result jingle
+      const bcId = miniGameBetaCells[gameName];
+      if (bcId && collectBetaCell(bcId)) setTimeout(() => showBetaCellNotification(betaCellMap[bcId].name, betaCellMap[bcId].cat), 400);
+      updateConfidence(result.stars >= 3 ? 5 : result.stars >= 2 ? 4 : 3);
+      if (!result.noTick) {
+        if (result.hours) advanceTime(result.hours);
+        else { tick(0.25); advanceTime(0.25); }
+      }
+      renderPassage(nextPassage);
+    });
+  };
+  if (game.intro && !opts.skipIntro) showMiniGameIntro(gameName, game.intro, run); else run();
 }
 
-// ---- Mini-game passage registration ----
-// Day/slot-based mini-game launch point used by startDay().
 function registerMiniGamePassage(day, slot, nextPassage) {
   const schedule = miniGameSchedule[day];
-  if (!schedule) return nextPassage; // Day 1 has its own built-in mini-games
+  if (!schedule) return nextPassage;
   const game = slot === 'am' ? schedule.am : schedule.pm;
   const p = 'd' + day + '-game-' + slot;
-  const hasImpl = !!MiniGames[game.name];
-
+  const intro = MiniGames[game.name] && MiniGames[game.name].intro;
   addPassage(p, {
-    content: (s) => '<h2>' + game.name + '</h2>' +
-      // ART: Mini-game preview illustration
-      '<p class="passage-scene">' + game.desc + '</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Ready for a challenge?"</p>' +
-      (hasImpl ? '' : '<p><em>(Mini-game coming soon — simulating result for now.)</em></p>'),
-    // AUDIO: Play mini-game start jingle
-    onEnter: () => { advanceTime(0.25); showCompanion("Let's do this!"); },
+    content: (s) => sceneArt(intro ? intro.emoji : '🎮', ['🎮 ✨'], 'day') +
+      '<h2>' + game.name + '</h2><p class="passage-scene">' + game.desc + '</p>',
+    onEnter: () => { setClock(slot === 'am' ? 10.5 : 15.0); showCompanion(pick(['Want to give it a try?', 'Mini-game time!', 'This one\'s fun.'])); },
     choices: [{
-      text: hasImpl ? '▶ Play ' + game.name : 'Simulate ' + game.name,
-      next: function() {
-        if (hasImpl) {
-          playMiniGame(game.name, { tier: getDayTier(day), currentBG: state.bg.current }, nextPassage);
-          return null; // playMiniGame handles rendering
-        }
-        return p + '-result';
-      }
+      text: '▶ Play ' + game.name,
+      next: function() { playMiniGame(game.name, { tier: getDayTier(day) }, nextPassage); return null; }
     }]
   });
-
-  addPassage(p + '-result', {
-    content: (s) => '<h2>Nice work!</h2><p>You completed the ' + game.name + ' challenge.</p>' +
-      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong></p>',
-    onEnter: (s) => {
-      tick(0.25); advanceTime(0.25);
-      showCompanion("Good job! You're getting better at this.");
-      const bcId = miniGameBetaCells[game.name];
-      if (bcId && collectBetaCell(bcId)) setTimeout(() => showBetaCellNotification(betaCellMap[bcId].name, betaCellMap[bcId].cat), 500);
-    },
-    next: nextPassage, continueText: 'Continue'
-  });
-
   return p;
 }
 
 // ============================================
-// 12. GENERIC SNACK PASSAGE
+// 12. SNACKS
 // ============================================
+// Carb values are estimates (see HANDOFF). Nut snacks never show up on school days,
+// since many Canadian schools are nut-free.
+
+const SNACKS = [
+  { emoji: '🍎🧀', name: 'Apple slices + cheese stick', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🥕🫘', name: 'Veggie sticks + hummus', carbs: 8, speed: 'slow', tag: 'mostly veggies' },
+  { emoji: '🥛', name: 'Glass of milk', carbs: 12, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🍌', name: 'Half a banana', carbs: 15, speed: 'fast', tag: 'fruit' },
+  { emoji: '🍊', name: 'Orange', carbs: 15, speed: 'fast', tag: 'fruit' },
+  { emoji: '🍇', name: 'Small bunch of grapes', carbs: 15, speed: 'fast', tag: 'fruit' },
+  { emoji: '🥣🍓', name: 'Plain yogurt + berries', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🍿', name: 'Air-popped popcorn (3 cups)', carbs: 15, speed: 'slow', tag: 'whole grain' },
+  { emoji: '🍘🧀', name: 'Whole grain crackers + cheese', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🥪', name: 'Half a turkey sandwich', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🫛', name: 'Edamame', carbs: 8, speed: 'slow', tag: 'protein' },
+  { emoji: '🥚🍞', name: 'Hard-boiled egg + half slice of toast', carbs: 8, speed: 'slow', tag: 'protein' },
+  { emoji: '🥒🧀', name: 'Cucumber + cheese cubes', carbs: 3, speed: 'slow', tag: 'low carb' },
+  { emoji: '🍑🥣', name: 'Cottage cheese + peaches', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🌯', name: 'Small tortilla roll-up with turkey', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🍘🌻', name: 'Rice cake + sunflower seed butter', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🧁', name: 'Mini muffin', carbs: 15, speed: 'fast', tag: 'treat' },
+  { emoji: '🍪🥛', name: 'Two small cookies + milk', carbs: 30, speed: 'fast', tag: 'treat' },
+  { emoji: '🥜', name: 'Handful of almonds', carbs: 5, speed: 'slow', tag: 'low carb', notAtSchool: true },
+  { emoji: '🍎🥜', name: 'Apple + peanut butter', carbs: 20, speed: 'slow', tag: 'carbs + protein', notAtSchool: true }
+];
+
+function snackChoices(day, n) {
+  const school = !isWeekend(day);
+  return shuffle(SNACKS.filter(s => !(school && s.notAtSchool))).slice(0, n);
+}
+
+function snackAdvice(bg) {
+  if (bg > 10) return 'You\'re running a bit high. A lower-carb snack could be a good pick.';
+  if (bg < 5) return 'You\'re on the low side. A snack with some carbs is a good idea.';
+  return pick(['Anything works. Carbs plus protein keeps you steady longest.', 'Pick whatever sounds good.', 'Snack time!']);
+}
 
 function registerSnackPassage(day, slot, nextPassage) {
   const p = 'd' + day + '-snack-' + slot;
-  const snackOptions = [
-    ['Apple slices (~15g)', 15, 'fast'],
-    ['Cheese and crackers (~15g)', 15, 'slow'],
-    ['Almonds (~5g)', 5, 'slow'],
-    ['Yogurt (~15g)', 15, 'fast'],
-    ['Granola bar (~20g)', 20, 'slow'],
-    ['Trail mix (~17g)', 17, 'slow'],
-    ['Banana (~27g)', 27, 'fast'],
-    ['Celery with peanut butter (~8g)', 8, 'slow']
-  ];
-  // Pick 3 random snack options
-  const shuffled = snackOptions.sort(() => Math.random() - 0.5).slice(0, 3);
-
+  const options = snackChoices(day, 4);
   addPassage(p, {
-    content: (s) => '<h2>Snack Time</h2>' +
-      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong> — ' + getBGZone(s.bg.current).label + '</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Quick snack to keep things steady."</p>',
-    onEnter: () => { advanceTime(0.5); tick(0.5); },
-    choices: shuffled.map(sn => ({
-      text: sn[0],
-      onSelect: (s) => { eatFood(sn[1], sn[2]); s.score.snacksRemembered++; },
+    content: (s) => sceneArt(options.map(o => o.emoji).join(' '), []) +
+      '<h2>' + { morning: 'Morning Snack', afternoon: 'Afternoon Snack', late: 'After-School Snack' }[slot] + '</h2>' +
+      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "' + snackAdvice(s.bg.current) + '"</p>',
+    onEnter: (s) => {
+      setClock({ morning: 10.0, afternoon: 14.5, late: 16.5 }[slot]);
+      const picks = s.narrative.dayPicks;
+      if (picks && picks.dipSlot === slot && !s.narrative.dipDone && s.bg.current < 9) {
+        s.narrative.dipDone = true;
+        s.carbs.pending = [];
+        s.insulin.pendingDoses = [];
+        s.bg.current = Math.round((3.5 + Math.random() * 0.4) * 10) / 10;
+        s.bg.trend = 'falling';
+        s.narrative.lowCause = isWeekend(day)
+          ? pick(['You spent the morning biking around the neighbourhood.', 'You were outside playing tag for ages.'])
+          : pick(['Gym class was a lot of running today.', 'Recess was one huge game of tag.']);
+        notify();
+      }
+    },
+    choices: options.map(sn => ({
+      text: sn.emoji + ' ' + sn.name + ' <span class="carb-tag">~' + sn.carbs + 'g · ' + sn.tag + '</span>',
+      onSelect: () => { eatSnack(sn.carbs, sn.speed); },
       next: nextPassage
     }))
   });
@@ -2492,405 +2602,293 @@ function registerSnackPassage(day, slot, nextPassage) {
 }
 
 // ============================================
-// 13. DAY GENERATOR — startDay(n)
+// 13. DAY BUILDER
 // ============================================
+// choosePicks() decides the day's random events; buildDay() registers its passages.
+// The picks are saved, so a reloaded game rebuilds the same day and resumes mid-day.
 
 function getDayTier(day) {
-  if (day <= 2) return 1;
-  if (day <= 4) return 2;
-  return 3;
+  const base = day <= 2 ? 1 : day <= 4 ? 2 : 3;
+  return Math.min(3, base + (state.time.week - 1));
+}
+
+function choosePicks(day) {
+  const tier = getDayTier(day);
+  const seen = state.narrative.eventsCompleted;
+  const meals = pickFromPool(mealPool, tier, 3, seen, day);
+  const social = pickFromPool(socialPool, tier, 1, seen, day)[0];
+  const emotional = pickFromPool(emotionalPool, tier, 1, seen, day)[0];
+  const practical = pickFromPool(practicalPool, tier, 1, seen, day)[0];
+  const picks = {
+    day,
+    meals: meals.map(e => e.id),
+    social: social ? social.id : null,
+    emotional: emotional ? emotional.id : null,
+    practical: practical ? practical.id : null,
+    dipSlot: (day !== 4 && day !== 5 && Math.random() < 0.35) ? 'afternoon' : null
+  };
+  [...meals, social, emotional, practical].forEach(e => { if (e) seen.push(e.id); });
+  return picks;
+}
+
+function buildDay(day, picks) {
+  const find = (pool, id) => pool.find(e => e.id === id);
+  const meals = picks.meals.map(id => find(mealPool, id)).filter(Boolean);
+  const socialEvent = find(socialPool, picks.social);
+  const emotionalEvent = find(emotionalPool, picks.emotional);
+  const practicalEvent = find(practicalPool, picks.practical);
+  const night = (day === 3 || day === 5 || day === 7);
+  const dayEnd = 'd' + day + '-end';
+  const nightPassage = night ? 'd' + day + '-night' : dayEnd;
+  const bedtimeResult = 'd' + day + '-bedtime-check';
+  const bedtime = 'd' + day + '-bedtime';
+
+  registerDayEnd(day);
+  if (night) registerNightEvent(day, dayEnd);
+  registerBedtime(day, bedtimeResult);
+  registerBedtimeCheck(day, bedtimeResult, nightPassage);
+
+  let evening;
+  if (day === 5) evening = registerEmotionalAnchor_Day5Evening(day, bedtime);
+  else if (emotionalEvent) evening = emotionalEvent.register(day, bedtime);
+  else if (practicalEvent) evening = practicalEvent.register(day, bedtime);
+  else evening = bedtime;
+
+  let dinner;
+  if (day === 3) dinner = registerScriptedDinner_Day3(day, evening);
+  else if (meals[2]) dinner = meals[2].register(day, evening, 18.0);
+  else dinner = evening;
+
+  const lateSnack = registerSnackPassage(day, 'late', dinner);
+  const pmGame = registerMiniGamePassage(day, 'pm', lateSnack);
+  const pmSnack = registerSnackPassage(day, 'afternoon', pmGame);
+
+  let social;
+  if (day === 4) social = registerScriptedExercise_Day4(day, pmSnack);
+  else if (socialEvent) social = socialEvent.register(day, pmSnack);
+  else if (practicalEvent && emotionalEvent) social = practicalEvent.register(day, pmSnack);
+  else social = pmSnack;
+
+  const lunch = meals[1] ? meals[1].register(day, social, 12.0) : social;
+  const amGame = registerMiniGamePassage(day, 'am', lunch);
+  const amSnack = registerSnackPassage(day, 'morning', amGame);
+
+  let breakfast;
+  if (day === 2) breakfast = registerScriptedMorning_Day2(day, amSnack);
+  else if (day === 5) breakfast = registerScriptedMorning_Day5(day, amSnack);
+  else if (day === 6) breakfast = registerScriptedMorning_Day6(day, amSnack);
+  else if (day === 7) breakfast = registerScriptedMorning_Day7(day, amSnack);
+  else if (meals[0]) breakfast = meals[0].register(day, amSnack, 7.5);
+  else breakfast = amSnack;
+
+  registerWakeup(day, breakfast);
+  return 'd' + day + '-wakeup';
 }
 
 function startDay(day) {
-  const tier = getDayTier(day);
-  const seen = state.narrative.eventsCompleted;
-
-  // Reset daily score
   resetDayScore();
-
-  // Pick events from pools
-  const mealEvents = pickFromPool(mealPool, tier, 3, seen);
-  const socialEvent = pickFromPool(socialPool, tier, 1, seen)[0];
-  const emotionalEvent = pickFromPool(emotionalPool, tier, 1, seen)[0];
-  const practicalEvent = pickFromPool(practicalPool, tier, 1, seen)[0];
-
-  // Store what we picked
-  state.narrative.dayEvents = { meals: mealEvents, social: socialEvent, emotional: emotionalEvent, practical: practicalEvent };
-
-  // Build the day's passage chain
-  // Wakeup → Breakfast → Morning Snack → Morning Game → [Social] → Lunch → Afternoon Snack → Afternoon Game → Late Snack → Dinner → Evening → Bedtime → [Night] → Day End
-
-  const dayEnd = 'd' + day + '-end';
-  const nightPassage = (day === 3 || day === 5 || day === 7) ? 'd' + day + '-night' : dayEnd;
-  const bedtimeResult = 'd' + day + '-bedtime-check';
-  const bedtime = 'd' + day + '-bedtime';
-  const evening = 'd' + day + '-evening';
-
-  // Register day-end
-  registerDayEnd(day);
-
-  // Night events for Days 3, 5, 7
-  if (day === 3 || day === 5 || day === 7) registerNightEvent(day, dayEnd);
-
-  // Bedtime
-  registerBedtime(day, bedtimeResult, nightPassage);
-  registerBedtimeCheck(day, bedtimeResult, nightPassage);
-
-  // Evening — emotional or practical event
-  let eveningPassage;
-  if (day === 5) {
-    // Scripted anchor: emotional check-in after sick day
-    eveningPassage = registerEmotionalAnchor_Day5Evening(day, bedtime);
-  } else if (emotionalEvent) {
-    eveningPassage = emotionalEvent.register(day, bedtime);
-    seen.push(emotionalEvent.id);
-  } else if (practicalEvent) {
-    eveningPassage = practicalEvent.register(day, bedtime);
-    seen.push(practicalEvent.id);
-  } else {
-    eveningPassage = bedtime;
-  }
-
-  // Dinner — scripted on Day 3 or from pool
-  let dinnerPassage;
-  if (day === 3) {
-    dinnerPassage = registerScriptedDinner_Day3(day, eveningPassage);
-  } else if (mealEvents[2]) {
-    dinnerPassage = mealEvents[2].register(day, eveningPassage);
-    seen.push(mealEvents[2].id);
-  } else {
-    dinnerPassage = eveningPassage;
-  }
-
-  // Late snack
-  const lateSnack = registerSnackPassage(day, 'late', dinnerPassage);
-
-  // Afternoon game
-  const pmGame = registerMiniGamePassage(day, 'pm', lateSnack);
-
-  // Afternoon snack
-  const pmSnack = registerSnackPassage(day, 'afternoon', pmGame);
-
-  // Social event (between lunch and afternoon snack, or skip if none)
-  // Day 4 replaces this slot with the scripted Soccer Practice anchor.
-  let socialPassage;
-  if (day === 4) {
-    socialPassage = registerScriptedExercise_Day4(day, pmSnack);
-  } else if (socialEvent) {
-    socialPassage = socialEvent.register(day, pmSnack);
-    seen.push(socialEvent.id);
-  } else if (practicalEvent && !seen.includes(practicalEvent.id)) {
-    socialPassage = practicalEvent.register(day, pmSnack);
-    seen.push(practicalEvent.id);
-  } else {
-    socialPassage = pmSnack;
-  }
-
-  // Lunch
-  let lunchPassage;
-  if (mealEvents[1]) {
-    lunchPassage = mealEvents[1].register(day, socialPassage);
-    seen.push(mealEvents[1].id);
-  } else {
-    lunchPassage = socialPassage;
-  }
-
-  // Morning game
-  const amGame = registerMiniGamePassage(day, 'am', lunchPassage);
-
-  // Morning snack
-  const amSnack = registerSnackPassage(day, 'morning', amGame);
-
-  // Breakfast — scripted on Day 2, 5, 6, 7; pool on others
-  let breakfastPassage;
-  if (day === 2) {
-    breakfastPassage = registerScriptedMorning_Day2(day, amSnack);
-  } else if (day === 5) {
-    breakfastPassage = registerScriptedMorning_Day5(day, amSnack);
-  } else if (day === 6) {
-    breakfastPassage = registerScriptedMorning_Day6(day, amSnack);
-  } else if (day === 7) {
-    breakfastPassage = registerScriptedMorning_Day7(day, amSnack);
-  } else if (mealEvents[0]) {
-    breakfastPassage = mealEvents[0].register(day, amSnack);
-    seen.push(mealEvents[0].id);
-  } else {
-    breakfastPassage = amSnack;
-  }
-
-  // Wakeup
-  registerWakeup(day, breakfastPassage);
-
-  // Start the day
+  state.time.day = day;
+  state.narrative.lowsToday = 0;
+  state.narrative.dipDone = false;
+  state.narrative.lowBGHandled = false;
+  state.narrative.rescueInProgress = false;
+  const picks = choosePicks(day);
+  state.narrative.dayPicks = picks;
+  const first = buildDay(day, picks);
   // AUDIO: Play morning ambient track
-  renderPassage('d' + day + '-wakeup');
+  renderPassage(first);
 }
 
 // ============================================
-// 14. WAKEUP / BEDTIME / DAY-END TEMPLATES
+// 14. WAKEUP / BEDTIME / NIGHT / DAY-END
 // ============================================
 
-// Per-day wake-up flavor — makes each day feel distinct
-// Scripted moments on Days 1, 3, 5, 7 get their own breakfast flow,
-// so these themes focus on setting the TONE of each day.
 const dayThemes = {
-  2: {
-    headline: 'Day 2 — First Day Solo',
-    scene: 'Morning. Yesterday\'s tutorial is over. Today you make the calls.',
-    companionLine: "Morning. I'll still be here, but today I want you driving. You've got the basics now.",
-    continueText: 'Start the day'
-  },
-  3: {
-    headline: 'Day 3 — Building Muscle',
-    scene: 'Third morning in a row. The routine is starting to feel like a routine.',
-    companionLine: "Day three. The carb counting is getting easier, right? Tonight\u2019s dinner is the big one \u2014 I\u2019m going to let you fly solo on that.",
-    continueText: 'Time for breakfast'
-  },
-  4: {
-    headline: 'Day 4 — Game Day',
-    scene: 'Mid-week. Your backpack has your gym clothes in it. Soccer practice after school today.',
-    companionLine: "Game day. Exercise is one of the trickiest parts of T1D \u2014 it drops your BG, sometimes hours after you\u2019re done. We\u2019ll plan around it.",
-    continueText: "Let\u2019s do it"
-  },
-  5: {
-    headline: 'Day 5 — Something\'s Off',
-    scene: '',
-    companionLine: '',
-    skipBoilerplate: true, // Day 5 has a scripted morning that replaces the wakeup body
-    continueText: 'Continue'
-  },
-  6: {
-    headline: 'Day 6 — Saturday',
-    scene: 'No school. No rush. The whole day stretches out in front of you.',
-    companionLine: "Weekend. Different rhythm. People sleep in, eat later, snack more randomly. Keep an eye on the patterns \u2014 they\u2019re different from weekdays.",
-    continueText: 'Enjoy the morning'
-  },
-  7: {
-    headline: 'Day 7 — Field Trip',
-    scene: '',
-    companionLine: '',
-    skipBoilerplate: true, // Day 7 scripted
-    continueText: 'Continue'
-  }
+  1: { headline: 'Monday', art: ['🛏️ ⏰ 🎒'], line: 'New week, new start. You know the basics now.' },
+  2: { headline: 'Tuesday: First Day Solo', art: ['🛏️ ☀️ 🎒'], line: 'Morning! Today you make the calls. I\'ll be right here.' },
+  3: { headline: 'Wednesday', art: ['🛏️ 🌤️ 📚'], line: 'Day three. The routine is starting to feel like a routine.' },
+  4: { headline: 'Thursday: Game Day', art: ['🛏️ ⚽ 👟'], line: 'Soccer practice after school today. We\'ll plan for it.' },
+  5: { headline: 'Friday', art: ['🛏️ 🌧️'], line: '', skipBoilerplate: true },
+  6: { headline: 'Saturday', art: ['🛏️ 😴 🌞'], line: 'Weekend! Sleeping in and eating later can shift your BG a bit.' },
+  7: { headline: 'Sunday: Family Outing', art: ['🛏️ 🚲 🧺'], line: 'Sunday! Bike ride and picnic at the park today.' }
 };
 
 function registerWakeup(day, nextPassage) {
-  const theme = dayThemes[day];
+  const theme = dayThemes[day] || { headline: dayName(day), art: ['🛏️ ☀️'], line: '' };
   addPassage('d' + day + '-wakeup', {
-    content: (s) => {
-      const headline = theme ? theme.headline : ('Day ' + day);
-      const scene    = theme && theme.scene ? theme.scene : 'Morning. A new day.';
-      if (theme && theme.skipBoilerplate) {
-        // Day 5/7 show only the headline — the scripted morning passage follows immediately
-        return '<h2>' + headline + '</h2>' +
-          // ART: Scene background \u2014 bedroom morning (day-specific)
-          '<p class="passage-scene">You wake up.</p>';
-      }
-      return '<h2>' + headline + '</h2>' +
-        // ART: Scene background \u2014 bedroom morning (day-specific)
-        '<p class="passage-scene">' + scene + '</p>' +
-        '<p>You check your BG: <strong>' + s.bg.current.toFixed(1) + '</strong> \u2014 ' + getBGZone(s.bg.current).label + '.</p>';
-    },
+    content: (s) => sceneArt('🌅', theme.art, 'morning') +
+      '<h2>' + theme.headline + '</h2>' +
+      (theme.skipBoilerplate ? '<p class="passage-scene">You wake up.</p>'
+        : '<p>You check your BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '.</p>'),
     onEnter: (s) => {
-      // AUDIO: Play morning ambient track (variant per day of week)
+      // AUDIO: Play morning ambient track
       s.time.hour = 7.0;
-      // Morning BG \u2014 slight randomness, 6-9 range
-      const morningBG = 6 + Math.random() * 3;
-      s.bg.current = Math.round(morningBG * 10) / 10;
+      s.bg.current = Math.round((6 + Math.random() * 3) * 10) / 10;
       s.bg.trend = 'stable';
+      s.carbs.pending = [];
+      s.insulin.pendingDoses = [];
+      s.energy = Math.max(s.energy, 80);
       notify();
-      const line = theme && theme.companionLine
-        ? theme.companionLine
-        : (randomLine('morningGreeting') + ' ' + s.bg.current.toFixed(1) + ' \u2014 ' + getBGZone(s.bg.current).label.toLowerCase() + '.');
-      showCompanion(line, 6000);
+      if (theme.line) showCompanion(theme.line, 6000);
     },
     next: nextPassage,
-    continueText: theme ? theme.continueText : 'Time for breakfast'
+    continueText: 'Start the day'
   });
 }
 
-function registerBedtime(day, nextId, nightPassage) {
+const BEDTIME_SNACKS = [
+  { emoji: '🍘🧀', name: 'Crackers with cheese', carbs: 15 },
+  { emoji: '🥛', name: 'Glass of milk', carbs: 12 },
+  { emoji: '🍞🌻', name: 'Toast with seed butter', carbs: 15 },
+  { emoji: '🥣🍓', name: 'Yogurt with berries', carbs: 15 },
+  { emoji: '🍎🧀', name: 'Apple slices and cheese', carbs: 15 },
+  { emoji: '🥒', name: 'Cucumber slices (a light pick)', carbs: 3 }
+];
+
+function registerBedtime(day, nextId) {
+  const options = shuffle(BEDTIME_SNACKS).slice(0, 3);
   addPassage('d' + day + '-bedtime', {
-    content: (s) => '<h2>Bedtime Snack</h2>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Bedtime snack keeps things steady overnight."</p>',
-    onEnter: () => { advanceTime(1.5); tick(0.5); },
-    choices: [
-      { text: 'Crackers with cheese (~15g)', onSelect: (s) => { eatFood(15, 'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: nextId },
-      { text: 'Glass of milk (~12g)', onSelect: (s) => { eatFood(12, 'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: nextId },
-      { text: 'Toast with peanut butter (~15g)', onSelect: (s) => { eatFood(15, 'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: nextId }
-    ]
+    content: (s) => sceneArt('🌙', ['🛏️ 🧸 ' + options.map(o => o.emoji).join(' ')], 'night') +
+      '<h2>Bedtime Snack</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. ' +
+      (s.bg.current > 10 ? 'You\'re a bit high, so a light snack makes sense.' : 'A snack with some carbs and protein can help keep things steady overnight.') + '</p>',
+    onEnter: () => { setClock(21.0); },
+    choices: options.map(o => ({
+      text: o.emoji + ' ' + o.name + ' <span class="carb-tag">~' + o.carbs + 'g</span>',
+      onSelect: () => { eatFood(o.carbs, 'slow'); },
+      next: nextId
+    }))
   });
 }
 
 function registerBedtimeCheck(day, passageId, nextPassage) {
   addPassage(passageId, {
-    content: (s) => {
-      const ok = s.bg.current >= 5 && s.bg.current <= 12;
-      return '<h2>Final Check</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong> — ' + getBGZone(s.bg.current).label + '</p>' +
-        '<p><strong>' + s.companion.name + ':</strong> "' + (ok ? 'Looking good for bedtime.' : 'Not perfect, but safe.') + '"</p>';
-    },
+    content: (s) => '<h2>Last Check</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "' + (inRange(s.bg.current) ? 'Looking good for bedtime.' : 'Not perfect, and that\'s okay. Your plan has you covered tonight.') + '"</p>',
     onEnter: () => { tick(0.5); },
-    next: nextPassage, continueText: 'Go to sleep'
+    next: nextPassage, continueText: '😴 Go to sleep'
   });
 }
 
 function registerNightEvent(day, nextPassage) {
   addPassage('d' + day + '-night', {
     content: (s) => {
-      // AUDIO: Play night ambient track
-      const event = Math.random();
-      if (event < 0.4) {
-        s.bg.current = 4.0 + Math.random();
-        s.bg.trend = 'falling';
-        notify();
-        return '<h2>Night Alert</h2>' +
-          '<p class="passage-scene">2:30 AM. Something wakes you.</p>' +
-          (s.player.device.bgMonitor === 'cgm'
-            ? '<p>Your CGM is alarming. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. Low.</p>'
-            : '<p>You feel shaky. You check: <strong>' + s.bg.current.toFixed(1) + '</strong>. Low.</p>') +
-          '<p>You grab a juice box from the nightstand. 15g of fast sugar. Wait... recheck...</p>' +
-          '<p>BG comes back up to <strong>6.2</strong>. Back to sleep.</p>';
-      } else if (event < 0.7) {
-        s.bg.current = 13 + Math.random() * 3;
-        s.bg.trend = 'rising';
-        notify();
-        return '<h2>Night Check</h2>' +
-          '<p class="passage-scene">3:00 AM.</p>' +
-          '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. Running high.</p>' +
-          '<p>A small correction dose and some water. It\'ll come down by morning.</p>';
-      } else {
-        return '<h2>Peaceful Night</h2>' +
-          '<p class="passage-scene">You sleep through the night.</p>' +
-          '<p>Morning BG will tell the story, but for now — rest.</p>';
-      }
+      const k = s.narrative.nightKind;
+      const cgm = s.player.device.bgMonitor === 'cgm';
+      if (k === 'low') return sceneArt('🌙', ['🛏️ ' + (cgm ? '📳' : '😟') + ' 🍬'], 'night') + '<h2>Night Alert</h2>' +
+        '<p class="passage-scene">2:30 AM. ' + (cgm ? 'Your CGM alarm goes off.' : 'You wake up feeling shaky.') + '</p>' +
+        '<p>BG: <strong>3.8</strong>. You take the ' + pick(['glucose tabs from your nightstand', 'juice box you keep by your bed']) + ', wait 15 minutes with a grown-up, and check again: <strong>5.4</strong>. A small snack, then back to sleep.</p>';
+      if (k === 'high') return sceneArt('🌙', ['🛏️ 🩸 💧'], 'night') + '<h2>Night Check</h2>' +
+        '<p class="passage-scene">3:00 AM.</p><p>BG: <strong>13.6</strong>. You and your grown-up follow your plan for highs, and you drink some water. Back to sleep.</p>';
+      return sceneArt('🌙', ['🛏️ 😴 ⭐'], 'night') + '<h2>Peaceful Night</h2><p class="passage-scene">You sleep right through.</p>';
     },
     onEnter: (s) => {
-      // Fix BG after night treatment
-      if (s.bg.current < 5) { s.bg.current = 6.2; notify(); }
-      else if (s.bg.current > 12) { const corrected = s.bg.current - 3; s.bg.current = Math.max(7, corrected); notify(); }
+      const r = Math.random();
+      s.narrative.nightKind = r < 0.3 ? 'low' : r < 0.55 ? 'high' : 'calm';
+      s.bg.current = s.narrative.nightKind === 'high' ? 8.5 : 6.5;
+      notify();
     },
-    next: nextPassage, continueText: 'Morning comes...'
+    next: nextPassage, continueText: '🌅 Morning comes...'
   });
+}
+
+// Small SVG line of today's BG with the green band, so players can see their day.
+function bgSparkline(samples) {
+  if (!samples || samples.length < 2) return '';
+  const W = 300, H = 70, lo = 2, hi = 18;
+  const y = v => H - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * H;
+  const pts = samples.map((s, i) => (i / (samples.length - 1) * W).toFixed(1) + ',' + y(s.value).toFixed(1)).join(' ');
+  return '<svg class="sparkline" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+    '<rect x="0" y="' + y(10) + '" width="' + W + '" height="' + (y(5) - y(10)) + '" fill="rgba(76,175,80,0.2)"/>' +
+    '<polyline points="' + pts + '" fill="none" stroke="#5b8fb9" stroke-width="2.5"/></svg>' +
+    '<p class="spark-cap">Your BG today. The green band is 5 to 10.</p>';
+}
+
+function dayTIR(s) {
+  const samples = s.score.bgSamples;
+  return samples.length ? Math.round(samples.filter(x => inRange(x.value)).length / samples.length * 100) : 80;
 }
 
 function registerDayEnd(day) {
   addPassage('d' + day + '-end', {
     noWrap: true,
     content: (s) => {
-      // AUDIO: Play end-of-day summary fanfare
-      const samples = s.score.bgSamples;
-      const inRange = samples.filter(x => x.value >= 5 && x.value <= 12).length;
-      const tir = samples.length > 0 ? Math.round((inRange / samples.length) * 100) : 75;
-      return '<div class="summary-panel"><h2>Day ' + day + ' — Complete</h2>' +
-        '<div class="summary-stat"><span class="label">Time in Range</span><span class="value" style="color:var(--zone-green)">' + tir + '%</span></div>' +
-        '<div class="tir-bar"><div class="tir-fill" style="width:' + tir + '%"></div></div>' +
-        '<div class="summary-stat"><span class="label">Meals Managed</span><span class="value">' + s.score.mealsManaged + '/4</span></div>' +
-        '<div class="summary-stat"><span class="label">Snacks</span><span class="value">' + s.score.snacksRemembered + '/3</span></div>' +
+      const tir = dayTIR(s);
+      return '<div class="summary-panel"><h2>' + dayName(day) + ' is done!</h2>' +
+        bgSparkline(s.score.bgSamples) +
+        '<div class="summary-stat"><span class="label">Time in the green zone</span><span class="value" style="color:var(--zone-green)">' + tir + '%</span></div>' +
+        '<div class="summary-stat"><span class="label">Lows handled</span><span class="value">' + (s.narrative.lowsToday || 0) + '</span></div>' +
         '<div class="summary-stat"><span class="label">Beta Cells</span><span class="value" style="color:var(--accent-warm)">' + s.score.collectiblesFound.length + '/' + s.score.totalCollectibles + '</span></div>' +
-        '<div class="summary-stat"><span class="label">Confidence</span><span class="value">' + s.confidence + '/100</span></div></div>' +
-        '<div class="passage"><p><strong>' + s.companion.name + ':</strong> "Day ' + day + ' done. ' +
-        (tir >= 70 ? 'Solid day. You should be proud.' : 'Tough day, but you showed up. That matters.') + '"</p></div>';
+        '<div class="summary-stat"><span class="label">Confidence</span><span class="value">' + s.confidence + '</span></div></div>' +
+        '<div class="passage"><p><strong>' + s.companion.name + ':</strong> "' + pick(['You showed up for every part of today.', 'Another day done. Nice work.', 'Every day teaches you something.']) + '"</p></div>';
     },
     onEnter: (s) => {
-      const samples = s.score.bgSamples;
-      const inRange = samples.filter(x => x.value >= 5 && x.value <= 12).length;
-      const tir = samples.length > 0 ? Math.round((inRange / samples.length) * 100) : 75;
-      s.score.timeInRange.push(tir);
-      saveGame(); // Auto-save at day transition
-      showCompanion("Day " + day + " in the books.", 5000);
+      s.score.timeInRange[day - 1] = dayTIR(s);
+      if (day === 7) s.flags.weekComplete = true;
+      showCompanion(dayName(day) + ' is in the books.', 5000);
     },
     choices: day < 7
-      ? [{ text: 'Start Day ' + (day + 1), onSelect: () => { state.time.day = day + 1; }, next: function() { startDay(day + 1); return null; } }]
-      : [{ text: 'View Weekly Summary', next: 'weekly-summary' }]
+      ? [{ text: '🌅 Start ' + dayName(day + 1), next: () => { startDay(day + 1); return null; } }]
+      : [{ text: '📊 See your week', next: 'weekly-summary' }]
   });
-
-  // Fix the day transition — we need to use startDay, not renderPassage
-  if (day < 7) {
-    // Override the choice to call startDay directly
-    const endId = 'd' + day + '-end';
-    const origPassage = passages[endId];
-    origPassage.choices = [{
-      text: 'Start Day ' + (day + 1),
-      onSelect: () => { state.time.day = day + 1; startDay(day + 1); },
-      next: null // startDay handles rendering
-    }];
-    // Override choice click to not call renderPassage(null)
-  }
 }
 
 // ============================================
 // 15. SCRIPTED ANCHORS
 // ============================================
 
-// Day 3 Dinner: Estimation Challenge — first meal without companion guidance
+// Wednesday dinner: estimation without Pip's help. Answers can be changed until right.
 function registerScriptedDinner_Day3(day, nextPassage) {
   const p = 'd3-anchor-estimation';
   addPassage(p, {
-    content: (s) => '<h2>The Estimation Challenge</h2>' +
-      '<p class="passage-scene">Home. Chicken stir-fry with noodles and vegetables. No label. And this time...</p>' +
-      '<p><strong>' + s.companion.name + '</strong> steps back. "This one\'s yours. I\'m not going to help with the carb count. You\'ve got the skills — let\'s see you use them."</p>' +
-      '<p>You look at the plate. Noodles, chicken, mixed veggies in sauce.</p>' +
-      '<p>How many carbs?</p>',
-    onEnter: () => {
-      advanceTime(0.5); tick(0.5);
-      showCompanion("Training wheels off. You've got this.");
-    },
-    choices: [
-      { text: 'About 30g', onSelect: (s) => { s.narrative.choices['d3-est'] = 30; }, next: p + '-result' },
-      { text: 'About 45g', onSelect: (s) => { s.narrative.choices['d3-est'] = 45; }, next: p + '-result' },
-      { text: 'About 60g', onSelect: (s) => { s.narrative.choices['d3-est'] = 60; }, next: p + '-result' }
-    ]
-  });
-
-  addPassage(p + '-result', {
-    content: (s) => {
-      const est = s.narrative.choices['d3-est'];
-      const actual = 45;
-      const diff = Math.abs(est - actual);
-      let fb;
-      if (diff <= 10) fb = "That's really close. The noodles are the main carb — about 35-40g for that portion, plus a few from the sauce and veggies.";
-      else if (est < actual) fb = "A bit low. Noodles are carb-heavy — that portion is about 35-40g just for the noodles. Easy to underestimate.";
-      else fb = "A bit high. Good instinct to err on the higher side though — overshooting is safer than undershooting.";
-      const dose = recommendedDose(actual, s.bg.current);
-      return '<p><strong>' + s.companion.name + '</strong> breaks silence: "' + fb + '"</p>' +
-        '<p>"Actual: about <strong>45g</strong>. You dose <strong>' + dose + ' units</strong>."</p>' +
-        '<p>"' + (diff <= 10 ? 'You did that on your own. Nicely done.' : 'Estimation takes practice. You\'re building the skill.') + '"</p>';
-    },
-    onEnter: (s) => {
-      eatFood(45, 'slow'); doseInsulin(recommendedDose(45, s.bg.current)); s.score.mealsManaged++;
-      tick(0.5); advanceTime(0.5);
-      if (collectBetaCell('correcting-high')) setTimeout(() => showBetaCellNotification(betaCellMap['correcting-high'].name, 'green'), 500);
-    },
-    next: nextPassage, continueText: 'Continue'
+    content: (s) => sceneArt('🥢 🍜 🥦 🍗', ['🏠 🍽️'], 'evening') +
+      '<h2>Count It Yourself</h2>' +
+      '<p class="passage-scene">Chicken stir-fry with noodles and vegetables. No label.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "This one\'s all you. About how many carbs?"</p>' +
+      '<p><small>The noodles look like about one fist-sized cup.</small></p>',
+    onEnter: () => { setClock(18.0); },
+    quiz: () => ({
+      options: [
+        { text: '🍜 About 15g', correct: false, feedback: 'That\'s a bit low. A cup of noodles has quite a lot of carbs.' },
+        { text: '🍜 About 45g', correct: true, feedback: 'Nice estimate! About 40g in the noodles and a few in the sauce and veggies.' },
+        { text: '🍜 About 90g', correct: false, feedback: 'That\'s a lot higher than this plate. One cup of noodles is closer to 40g.' }
+      ],
+      continueText: '🍽️ Eat dinner',
+      onDone: (s) => { eatMeal(45, 'slow'); tick(0.5); advanceTime(0.5); if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification(betaCellMap['estimating-carbs'].name, 'green'), 500); },
+      next: nextPassage
+    })
   });
   return p;
 }
 
-// Day 5: Sick morning
+// Friday: a sick morning. The player's job is to notice, tell a grown-up and check ketones.
+// Insulin decisions belong to the sick day plan from the diabetes team.
 function registerScriptedMorning_Day5(day, nextSnack) {
   const p = 'd5-anchor-sick';
   addPassage(p, {
-    content: (s) => '<h2>Something\'s Not Right</h2>' +
-      '<p class="passage-scene">You wake up feeling awful. Stomach is off. Head is foggy. You already know before you check — BG is going to be high.</p>' +
-      '<p>You check: <strong>16.5</strong>. Very high. And you didn\'t even eat anything unusual last night.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Sick day. This happens. When you\'re ill, your body releases stress hormones that push BG up. We need a plan."</p>',
-    onEnter: (s) => {
-      s.bg.current = 16.5; s.bg.trend = 'rising'; notify();
-      showCompanion("Sick day protocol. Let's take it step by step.");
-    },
-    choices: [
-      { text: 'Check ketones first', onSelect: () => { state.narrative.choices['d5-sick-step'] = 'ketones'; }, next: p + '-ketones' },
-      { text: 'Give a correction dose right away', onSelect: () => { state.narrative.choices['d5-sick-step'] = 'correct'; }, next: p + '-correct' },
-      { text: 'Drink water and wait', onSelect: () => { state.narrative.choices['d5-sick-step'] = 'water'; }, next: p + '-water' }
-    ]
+    content: (s) => sceneArt('🤒', ['🛏️ 🌡️ 🥣'], 'morning') +
+      '<h2>Something\'s Not Right</h2>' +
+      '<p class="passage-scene">You wake up with a sore tummy and a foggy head.</p>' +
+      '<p>You check: <strong class="bg-big red">16.5</strong>. Very high, and you didn\'t eat anything unusual last night.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Being sick can push BG up. What\'s a good first move?"</p>',
+    onEnter: (s) => { s.bg.current = 16.5; s.bg.trend = 'rising'; notify(); showCompanion('Sick day. Step by step.'); },
+    quiz: () => ({
+      options: [
+        { text: '🙋 Tell a grown-up and check for ketones', correct: true, feedback: 'Yes. Sick plus high BG means checking ketones, with a grown-up helping.' },
+        { text: '😴 Go back to sleep', correct: false, feedback: 'Being sick can make BG and ketones climb. It needs attention now.' },
+        { text: '🥞 Eat a big breakfast to feel better', correct: false, feedback: 'Your tummy and your BG need gentle care right now.' }
+      ],
+      continueText: '🧪 Check ketones',
+      next: p + '-ketones'
+    })
   });
 
   addPassage(p + '-ketones', {
-    content: (s) => '<p>You check ketones — <strong>moderate</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Good call checking first. Moderate ketones + high BG = give a correction AND drink water. If ketones go high, we call the doctor."</p>' +
-      '<p>You give a correction dose and drink a big glass of water.</p>',
+    content: (s) => sceneArt('🧪', ['⚠️ moderate'], 'morning') +
+      '<p>Ketones: <strong>moderate</strong>.</p>' +
+      '<p>You and your grown-up follow your <strong>sick day plan</strong> from your diabetes team. It covers what to do about insulin, when to check again, and when to call. You sip water and rest.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "That plan is exactly what it\'s for. Keep sipping."</p>',
     onEnter: (s) => {
-      doseInsulin(3); s.bg.current = 14; s.bg.trend = 'falling'; notify();
+      takeCorrection();
       updateConfidence(5);
       if (collectBetaCell('what-are-ketones')) setTimeout(() => showBetaCellNotification(betaCellMap['what-are-ketones'].name, 'blue'), 500);
       if (collectBetaCell('sick-day-red-flags')) setTimeout(() => showBetaCellNotification(betaCellMap['sick-day-red-flags'].name, 'red'), 1500);
@@ -2898,310 +2896,147 @@ function registerScriptedMorning_Day5(day, nextSnack) {
     next: p + '-continue', continueText: 'Continue'
   });
 
-  addPassage(p + '-correct', {
-    content: (s) => '<p>You give a correction dose.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Good — but on a sick day, always check ketones too. Let\'s do that now." Ketones: <strong>moderate</strong>.</p>' +
-      '<p>"Moderate ketones means drink water and keep a close eye. If they go high, we call the doctor."</p>',
-    onEnter: (s) => { doseInsulin(3); s.bg.current = 14; notify(); updateConfidence(3); },
-    next: p + '-continue', continueText: 'Continue'
-  });
-
-  addPassage(p + '-water', {
-    content: (s) => '<p>You drink water, but without insulin the BG isn\'t going anywhere.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Hydration is great, but you also need a correction dose when you\'re this high. And check ketones." Ketones: <strong>moderate</strong>.</p>' +
-      '<p>You give a correction dose.</p>',
-    onEnter: (s) => { doseInsulin(3); s.bg.current = 15; notify(); updateConfidence(3); },
-    next: p + '-continue', continueText: 'Continue'
-  });
-
   addPassage(p + '-continue', {
-    content: (s) => '<h2>Sick Day Continues</h2>' +
-      '<p>It\'s going to be one of those days. BG is coming down slowly: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "On sick days: check BG every 2 hours, keep drinking water, take corrections as needed, and eat what you can — even if you don\'t feel like it."</p>' +
-      '<p>You manage through the morning with frequent checks.</p>',
-    onEnter: (s) => {
-      advanceTime(1.0); tick(1.0);
-      // BG should be trending down from the correction
-      if (s.bg.current > 12) { s.bg.current = 11; s.bg.trend = 'falling'; notify(); }
-    },
-    next: nextSnack, continueText: 'Continue to mid-morning'
+    content: (s) => sceneArt('🛋️', ['🤒 💧 📺'], 'day') + '<h2>Staying Home</h2>' +
+      '<p>No school today. BG is coming down slowly: <strong>' + s.bg.current.toFixed(1) + '</strong>. Ketones are going down too.</p>' +
+      '<p>You rest on the couch and check more often than usual.</p>',
+    onEnter: () => { advanceTime(1.5); tick(1.5); },
+    next: nextSnack, continueText: 'Continue'
   });
-
   return p;
 }
 
-// Day 5 Evening: Emotional anchor after sick day
 function registerEmotionalAnchor_Day5Evening(day, nextPassage) {
   const p = 'd5-anchor-evening';
   addPassage(p, {
-    content: (s) => '<h2>End of a Tough Day</h2>' +
-      '<p class="passage-scene">Evening. You\'re still not 100%, but the worst is over. BG is back in range.</p>' +
-      '<p><strong>' + s.companion.name + '</strong> sits with you quietly for a moment.</p>' +
-      '<p>"Tough day. You handled it."</p>',
-    onEnter: () => { showCompanion("I mean it. Today was hard, and you showed up."); },
+    content: (s) => sceneArt('🌆', ['🛋️ 🤖 🧒'], 'evening') + '<h2>End of a Long Day</h2>' +
+      '<p class="passage-scene">Evening. You\'re feeling a bit better than this morning.</p>' +
+      '<p><strong>' + s.companion.name + '</strong> floats over. "How are you doing?"</p>',
+    onEnter: () => { showCompanion('Today was a lot.'); },
     choices: [
-      { text: '"Yeah. I\'m tired."', conf: 5, onSelect: () => { updateConfidence(5); }, next: p + '-resp' },
-      { text: '"It wasn\'t so bad."', conf: 3, onSelect: () => { updateConfidence(3); }, next: p + '-resp' },
-      { text: 'Say nothing. Just nod.', conf: 5, onSelect: () => { updateConfidence(5); }, next: p + '-resp' }
+      { text: '"Tired."', onSelect: () => updateConfidence(4), next: p + '-resp' },
+      { text: '"Better than this morning."', onSelect: () => updateConfidence(4), next: p + '-resp' },
+      { text: 'Just nod.', onSelect: () => updateConfidence(4), next: p + '-resp' }
     ]
   });
   addPassage(p + '-resp', {
-    content: (s) => '<p><strong>' + s.companion.name + ':</strong> "Sick days are the hardest. Not because the management is that much harder — but because you have to do all of it while feeling terrible. That takes real strength."</p>',
-    onEnter: () => {
-      if (collectBetaCell('bad-days-okay')) setTimeout(() => showBetaCellNotification(betaCellMap['bad-days-okay'].name, 'gold'), 500);
-    },
+    content: (s) => '<p><strong>' + s.companion.name + ':</strong> "Fair enough. Sick days mean doing extra work while you feel bad. You got through it."</p>',
+    onEnter: () => { if (collectBetaCell('bad-days-okay')) setTimeout(() => showBetaCellNotification(betaCellMap['bad-days-okay'].name, 'gold'), 500); },
     next: nextPassage, continueText: 'Continue'
   });
   return p;
 }
 
-// Day 7: Boss Day — framed as a field trip
+// Sunday: family bike ride and picnic.
 function registerScriptedMorning_Day7(day, nextSnack) {
-  const p = 'd7-anchor-fieldtrip';
+  const p = 'd7-anchor-outing';
   addPassage(p, {
-    content: (s) => '<h2>Field Trip Day!</h2>' +
-      // ART: Scene background — school bus / field trip destination
-      '<p class="passage-scene">Day 7. The big day. Your class is going on a field trip to the science museum. A whole day out of routine.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Field trip! Exciting, but we need to think ahead. No regular meal times, lots of walking, unfamiliar food options. Let\'s pack smart."</p>' +
-      '<p>You grab breakfast before the bus.</p>',
-    onEnter: (s) => {
-      advanceTime(0.5);
-      showCompanion("Big day. Let's make sure we're prepared.");
-    },
+    content: (s) => sceneArt('🌳 🚲 🧺', ['🏠 ➜ 🏞️'], 'morning') +
+      '<h2>Sunday Outing</h2>' +
+      '<p class="passage-scene">Your family is biking to the park for a picnic. A whole day out of the usual routine.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Biking plus no regular mealtimes. Let\'s start with a good breakfast."</p>',
+    onEnter: () => { advanceTime(0.5); showCompanion('Big day out!'); },
     choices: [
-      { text: 'Oatmeal with berries (~30g, slow-burning)', onSelect: (s) => { eatFood(30, 'slow'); doseInsulin(recommendedDose(30, s.bg.current)); s.score.mealsManaged++; }, next: p + '-pack' },
-      { text: 'Toast with peanut butter (~25g)', onSelect: (s) => { eatFood(25, 'slow'); doseInsulin(recommendedDose(25, s.bg.current)); s.score.mealsManaged++; }, next: p + '-pack' },
-      { text: 'Cereal (~45g, fast-burning)', onSelect: (s) => { eatFood(45, 'fast'); doseInsulin(recommendedDose(45, s.bg.current)); s.score.mealsManaged++; }, next: p + '-pack' }
+      { text: '🥣 Oatmeal with berries <span class="carb-tag">~30g · slow</span>', onSelect: () => { eatMeal(30, 'slow'); }, next: p + '-pack' },
+      { text: '🍞 Toast with seed butter <span class="carb-tag">~25g</span>', onSelect: () => { eatMeal(25, 'slow'); }, next: p + '-pack' },
+      { text: '🥞 Pancakes with syrup <span class="carb-tag">~50g · fast</span>', onSelect: () => { eatMeal(50, 'fast'); }, next: p + '-pack' }
     ]
   });
-
   addPassage(p + '-pack', {
-    content: (s) => '<h2>Pack for the Trip</h2>' +
-      '<p>The bus leaves in 10 minutes. What do you make sure to bring?</p>',
+    content: () => sceneArt('🎒', ['🚲 🧺'], 'morning') + '<h2>Ready to Ride</h2><p>What goes in your bike bag?</p>',
     onEnter: () => { tick(0.5); advanceTime(0.5); },
-    choices: [
-      { text: 'Everything: insulin, meter, glucose tabs, snacks, water, medical ID, extra supplies', onSelect: () => { updateConfidence(5); state.narrative.choices['d7-packed'] = 'full'; }, next: nextSnack },
-      { text: 'Essentials: insulin, glucose tabs, one snack', onSelect: () => { updateConfidence(3); state.narrative.choices['d7-packed'] = 'light'; }, next: nextSnack }
-    ]
+    quiz: () => ({
+      options: [
+        { text: '🎒 Insulin supplies, BG checker, glucose tabs, snacks, water, medical ID', correct: true, feedback: 'Perfect. Biking can lower BG, so fast sugar and snacks are a must.' },
+        { text: '🍬 Just glucose tabs', correct: false, feedback: 'Tabs are great, but you\'ll also want snacks, water, and a way to check your BG.' },
+        { text: '📱 Just your phone', correct: false, feedback: 'A long day out needs your diabetes supplies too.' }
+      ],
+      continueText: '🚲 Let\'s go',
+      onDone: () => updateConfidence(4),
+      next: nextSnack
+    })
   });
-
   return p;
 }
 
-// Day 2: First Day Solo — morning scripted with a pre-bolus teaching moment
+// Tuesday: timing of mealtime insulin, framed as "ask your team what's right for you".
 function registerScriptedMorning_Day2(day, nextSnack) {
   const p = 'd2-anchor-solo';
   addPassage(p, {
-    content: (s) => '<h2>Breakfast, On Your Own</h2>' +
-      // ART: Scene background — kitchen, morning light
-      '<p class="passage-scene">The kitchen. Cereal in a bowl, milk in the fridge, banana on the counter. No one hovering.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Here\u2019s a trick \u2014 the best time to take mealtime insulin is about 10 minutes BEFORE you eat. It gives the insulin a head start so it\u2019s working when the carbs hit."</p>' +
-      '<p>"Want to try pre-bolusing this morning?"</p>',
-    onEnter: () => { showCompanion("Pre-bolusing is a pro move. Give it a shot."); },
+    content: (s) => sceneArt('🥣 🍌 🥛', ['🏠 🌅'], 'morning') +
+      '<h2>Breakfast, On Your Own</h2>' +
+      '<p class="passage-scene">Cereal, milk and a banana. About 40g of carbs.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Some diabetes teams suggest taking mealtime insulin a little <em>before</em> eating, so it\'s already working when the food arrives. Ask yours what timing is right for you. What\'s your plan today?"</p>',
+    onEnter: () => { showCompanion('Your call.'); },
     choices: [
-      {
-        text: 'Pre-bolus 10 minutes early, then eat',
-        onSelect: (s) => {
-          doseInsulin(recommendedDose(40, s.bg.current));
-          advanceTime(0.17); tick(0.17);
-          eatFood(40, 'fast');
-          s.score.mealsManaged++;
-          updateConfidence(5);
-          if (collectBetaCell('pre-bolusing')) setTimeout(() => showBetaCellNotification(betaCellMap['pre-bolusing'].name, 'green'), 500);
-        },
-        next: p + '-good'
-      },
-      {
-        text: 'Dose and eat at the same time (the classic way)',
-        onSelect: (s) => {
-          eatFood(40, 'fast');
-          doseInsulin(recommendedDose(40, s.bg.current));
-          s.score.mealsManaged++;
-          updateConfidence(3);
-        },
-        next: p + '-classic'
-      }
+      { text: '⏱️ Insulin a few minutes before eating (if that\'s in my plan)', onSelect: () => { eatMeal(40, 'fast', true); updateConfidence(4); if (collectBetaCell('pre-bolusing')) setTimeout(() => showBetaCellNotification(betaCellMap['pre-bolusing'].name, 'green'), 500); }, next: p + '-done' },
+      { text: '🍽️ Insulin when I start eating', onSelect: () => { eatMeal(40, 'fast'); updateConfidence(4); }, next: p + '-done' }
     ]
   });
-
-  addPassage(p + '-good', {
-    content: (s) => '<p>You dose first, wash up, then come back and eat. By the time the cereal hits your stomach, the insulin is already working.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "See the difference? Your BG will still rise, but much less. This is the single biggest trick for smoother meals."</p>',
+  addPassage(p + '-done', {
+    content: (s) => '<p>Breakfast done. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Timing is one of those things you and your team figure out together."</p>',
     onEnter: () => { advanceTime(0.5); tick(0.5); },
     next: nextSnack, continueText: 'Continue'
   });
-
-  addPassage(p + '-classic', {
-    content: (s) => '<p>You eat and dose together. It works \u2014 the insulin just chases the carbs a little.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Totally fine. Tomorrow, maybe try pre-bolusing once and see what happens. BG spikes a lot less."</p>',
-    onEnter: () => { advanceTime(0.5); tick(0.5); },
-    next: nextSnack, continueText: 'Continue'
-  });
-
   return p;
 }
 
-// Day 4: Soccer Practice — exercise anchor
-// Replaces the social slot. Teaches pre-exercise snacking and BG monitoring during activity.
+// Thursday: soccer practice. Prep choice, then the Exercise Balance mini-game is the practice.
 function registerScriptedExercise_Day4(day, nextPassage) {
   const p = 'd4-anchor-soccer';
   addPassage(p, {
-    content: (s) => '<h2>Soccer Practice</h2>' +
-      // ART: Scene background — soccer field, afternoon
-      '<p class="passage-scene">After school. You\u2019re on the sideline tying your cleats. Practice starts in 10 minutes. You check your BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Exercise drops BG. A lot of it happens during, but some of it happens hours AFTER you stop. What\u2019s your plan?"</p>',
-    onEnter: (s) => {
-      // Force BG into a moderate range for the teaching moment
-      if (s.bg.current < 6) s.bg.current = 6.5;
-      if (s.bg.current > 10) s.bg.current = 8.2;
-      notify();
-      advanceTime(0.5);
-      showCompanion("Think about it before practice starts.");
-    },
-    choices: [
-      {
-        text: 'Eat 15g of slow carbs before practice (granola bar)',
-        onSelect: (s) => {
-          eatFood(15, 'slow');
-          s.score.snacksRemembered++;
-          state.narrative.choices['d4-ex-prep'] = 'snack';
-        },
-        next: p + '-during'
-      },
-      {
-        text: 'Just start \u2014 BG is in range, you\u2019ll handle it',
-        onSelect: () => { state.narrative.choices['d4-ex-prep'] = 'skip'; },
-        next: p + '-during'
-      },
-      {
-        text: 'Reduce insulin (if on pump) and have glucose tabs ready',
-        onSelect: (s) => {
-          s.insulin.basalActive = true; // cosmetic
-          state.narrative.choices['d4-ex-prep'] = 'reduce';
-          updateConfidence(3);
-        },
-        next: p + '-during'
-      }
-    ]
+    content: (s) => sceneArt('⚽ 🥅', ['🧒👟 🧒👟 🧒👟'], 'day') +
+      '<h2>Soccer Practice</h2>' +
+      '<p class="passage-scene">After school. You\'re tying your cleats. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Exercise lowers BG, during practice and sometimes for hours after. What do you do before you start?"</p>',
+    onEnter: (s) => { setClock(15.5); if (s.bg.current > 10) { s.bg.current = 8.4; notify(); } },
+    quiz: () => ({
+      options: [
+        { text: '🎒 Check BG and keep glucose tabs and a snack in my bag', correct: true, feedback: 'Yes. Knowing your BG and having fast sugar close by is the most important prep. Your diabetes team can help you make an exercise plan.' },
+        { text: '🤷 Nothing, just play', correct: false, feedback: 'Exercise can drop BG fast. Have fast sugar nearby, just in case.' },
+        { text: '🙈 Leave my supplies in the locker room', correct: false, feedback: 'If you go low on the field, you\'ll want your supplies close by.' }
+      ],
+      continueText: '⚽ Start practice',
+      next: () => { playMiniGame('Exercise Balance', { tier: 2, activity: '⚽' }, p + '-after'); return null; }
+    })
   });
-
-  addPassage(p + '-during', {
-    content: (s) => {
-      const prep = state.narrative.choices['d4-ex-prep'];
-      // AUDIO: Play crowd/whistle ambient for practice
-      // Simulate exercise drop
-      const drop = prep === 'skip' ? 3.5 : prep === 'snack' ? 1.8 : 1.5;
-      const before = s.bg.current;
-      s.bg.current = Math.max(3.2, s.bg.current - drop);
-      s.bg.trend = 'falling';
-      notify();
-
-      const low = s.bg.current < 5;
-      return '<h2>During Practice</h2>' +
-        '<p class="passage-scene">Scrimmage. Running, passing, sprinting for loose balls. 40 minutes in, you feel a bit shaky.</p>' +
-        '<p>You check your BG: <strong>' + s.bg.current.toFixed(1) + '</strong> (started at ' + before.toFixed(1) + ').</p>' +
-        (low
-          ? '<p><strong>' + s.companion.name + ':</strong> "You\u2019re low. Time to stop and treat."</p>'
-          : '<p><strong>' + s.companion.name + ':</strong> "Still in range, but trending down. Quick snack break?"</p>');
-    },
-    onEnter: () => { advanceTime(0.75); tick(0.75); },
-    choices: [
-      {
-        text: 'Eat glucose tabs (15g) and sit out 15 minutes',
-        onSelect: (s) => {
-          eatFood(15, 'fast');
-          s.bg.current = Math.max(s.bg.current, 6.2);
-          s.bg.trend = 'stable';
-          notify();
-          updateConfidence(4);
-          if (collectBetaCell('adjusting-exercise')) setTimeout(() => showBetaCellNotification(betaCellMap['adjusting-exercise'].name, 'green'), 500);
-        },
-        next: p + '-after'
-      },
-      {
-        text: 'Half a juice box + keep playing gently',
-        onSelect: (s) => {
-          eatFood(10, 'fast');
-          s.bg.current = Math.max(s.bg.current, 5.5);
-          notify();
-          updateConfidence(3);
-        },
-        next: p + '-after'
-      },
-      {
-        text: 'Push through the last 10 minutes',
-        condition: (s) => s.bg.current >= 5,
-        onSelect: (s) => {
-          s.bg.current = Math.max(3.2, s.bg.current - 0.8);
-          notify();
-          updateConfidence(-2);
-        },
-        next: p + '-after'
-      }
-    ]
-  });
-
   addPassage(p + '-after', {
-    content: (s) => '<h2>After Practice</h2>' +
-      '<p class="passage-scene">You cool down, stretch, grab your bag. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Here\u2019s the tricky part \u2014 your muscles keep pulling glucose out of your blood for hours after intense exercise. Watch for a low later tonight, and eat a solid snack with protein."</p>',
-    onEnter: () => {
-      advanceTime(0.5); tick(0.5);
-      if (collectBetaCell('exercise-emergencies')) setTimeout(() => showBetaCellNotification(betaCellMap['exercise-emergencies'].name, 'red'), 800);
-    },
-    next: nextPassage, continueText: 'Head home'
+    content: (s) => sceneArt('🏁', ['😅 💧 🎒'], 'evening') + '<h2>After Practice</h2>' +
+      '<p class="passage-scene">You cool down and grab your bag. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Your muscles keep using sugar for a while after practice. Keep an eye on it this evening."</p>',
+    onEnter: () => { if (collectBetaCell('exercise-emergencies')) setTimeout(() => showBetaCellNotification(betaCellMap['exercise-emergencies'].name, 'red'), 800); },
+    next: nextPassage, continueText: '🏠 Head home'
   });
-
   return p;
 }
 
-// Day 6: Saturday Brunch — weekend rhythm, late breakfast with more choices
+// Saturday: late brunch.
 function registerScriptedMorning_Day6(day, nextSnack) {
   const p = 'd6-anchor-brunch';
   addPassage(p, {
-    content: (s) => '<h2>Saturday Brunch</h2>' +
-      // ART: Scene background — kitchen, weekend morning, sun through window
-      '<p class="passage-scene">It\u2019s almost 10. Somebody in the house is making waffles. Coffee smell. A lazy morning.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Weekend mornings are tricky because you sleep later and eat later. Your BG may have been drifting up since you woke up. Check first, then dose for what\u2019s on the plate."</p>' +
-      '<p>You check: <strong>' + s.bg.current.toFixed(1) + '</strong> \u2014 ' + getBGZone(s.bg.current).label + '.</p>',
-    onEnter: (s) => {
-      s.time.hour = 10.0; notify();
-      showCompanion("Weekend mode. Same rules, different timing.");
-    },
+    content: (s) => sceneArt('🧇 🍳 🍓', ['🏠 ☀️ 😴'], 'morning') + '<h2>Saturday Brunch</h2>' +
+      '<p class="passage-scene">It\'s almost 10. Somebody is making waffles.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Late breakfast on weekends. Check first, then follow your plan for what\'s on your plate."</p>' +
+      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '.</p>',
+    onEnter: (s) => { s.time.hour = 10.0; notify(); },
     choices: [
-      {
-        text: 'Two waffles with syrup + bacon (~55g)',
-        onSelect: (s) => { eatFood(55, 'fast'); doseInsulin(recommendedDose(55, s.bg.current)); s.score.mealsManaged++; state.narrative.choices['d6-brunch'] = 'waffles'; },
-        next: p + '-done'
-      },
-      {
-        text: 'Scrambled eggs + one waffle + fruit (~30g)',
-        onSelect: (s) => { eatFood(30, 'slow'); doseInsulin(recommendedDose(30, s.bg.current)); s.score.mealsManaged++; updateConfidence(3); state.narrative.choices['d6-brunch'] = 'balanced'; },
-        next: p + '-done'
-      },
-      {
-        text: 'Yogurt parfait with granola and berries (~35g)',
-        onSelect: (s) => { eatFood(35, 'slow'); doseInsulin(recommendedDose(35, s.bg.current)); s.score.mealsManaged++; updateConfidence(2); state.narrative.choices['d6-brunch'] = 'parfait'; },
-        next: p + '-done'
-      }
+      { text: '🧇 Two waffles with syrup + bacon <span class="carb-tag">~55g · fast</span>', onSelect: (s) => { eatMeal(55, 'fast'); s.narrative.choices['d6-brunch'] = 'waffles'; }, next: p + '-done' },
+      { text: '🍳 Eggs + one waffle + fruit <span class="carb-tag">~30g</span>', onSelect: (s) => { eatMeal(30, 'slow'); s.narrative.choices['d6-brunch'] = 'balanced'; }, next: p + '-done' },
+      { text: '🥣 Yogurt parfait with granola <span class="carb-tag">~35g</span>', onSelect: (s) => { eatMeal(35, 'slow'); s.narrative.choices['d6-brunch'] = 'parfait'; }, next: p + '-done' }
     ]
   });
-
   addPassage(p + '-done', {
     content: (s) => {
-      const pick = state.narrative.choices['d6-brunch'];
-      const note = pick === 'waffles'
-        ? "Waffles + syrup is a lot of fast carbs. Pre-bolusing would help here \u2014 otherwise expect a bump."
-        : pick === 'balanced'
-          ? "Good balance. The eggs slow the waffle, and the fruit keeps it reasonable."
-          : "Parfait is deceptively carby from the granola and berries, but protein and fat smooth it out.";
-      return '<p><strong>' + s.companion.name + ':</strong> "' + note + '"</p>' +
-        '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>';
+      const k = s.narrative.choices['d6-brunch'];
+      const note = k === 'waffles' ? 'Syrup is fast sugar, so expect your BG to go up for a bit before it settles.'
+        : k === 'balanced' ? 'Eggs and fruit with the waffle. Nice mix.'
+        : 'Granola has more carbs than people think. Good thing you counted it.';
+      return '<p><strong>' + s.companion.name + ':</strong> "' + note + '"</p><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>';
     },
     onEnter: () => { advanceTime(0.75); tick(0.75); },
     next: nextSnack, continueText: 'Continue'
   });
-
   return p;
 }
 
@@ -3213,54 +3048,53 @@ addPassage('weekly-summary', {
   noWrap: true,
   content: (s) => {
     // AUDIO: Play weekly summary celebration
-    const tirs = s.score.timeInRange;
-    const avgTIR = tirs.length > 0 ? Math.round(tirs.reduce((a, b) => a + b, 0) / tirs.length) : 70;
-    const bestDay = tirs.indexOf(Math.max(...tirs)) + 1;
-    const toughDay = tirs.indexOf(Math.min(...tirs)) + 1;
-    const totalBC = s.score.collectiblesFound.length;
-    let stars, starMsg;
-    if (avgTIR >= 75) { stars = 3; starMsg = "Amazing! You handled everything like a pro. Can you do it again with new challenges?"; }
-    else if (avgTIR >= 55) { stars = 2; starMsg = "Solid week! You really know your stuff. Ready for another?"; }
-    else { stars = 1; starMsg = "Great start! You're learning fast. Play another week to level up!"; }
-
-    return '<div class="summary-panel"><h2>Week ' + s.time.week + ' — Complete!</h2>' +
-      '<div style="text-align:center;font-size:36px;margin:16px 0;">' + '⭐'.repeat(stars) + '</div>' +
-      '<p style="text-align:center;color:var(--text-secondary);margin-bottom:20px;">' + starMsg + '</p>' +
-      '<div class="summary-stat"><span class="label">Average Time in Range</span><span class="value" style="color:var(--zone-green)">' + avgTIR + '%</span></div>' +
-      '<div class="tir-bar"><div class="tir-fill" style="width:' + avgTIR + '%"></div></div>' +
-      '<div class="summary-stat"><span class="label">Best Day</span><span class="value">Day ' + bestDay + ' (' + (tirs[bestDay - 1] || '?') + '%)</span></div>' +
-      '<div class="summary-stat"><span class="label">Toughest Day</span><span class="value">Day ' + toughDay + ' (' + (tirs[toughDay - 1] || '?') + '%)</span></div>' +
-      '<div class="summary-stat"><span class="label">Beta Cells Collected</span><span class="value" style="color:var(--accent-warm)">' + totalBC + '/' + s.score.totalCollectibles + '</span></div>' +
-      '<div class="summary-stat"><span class="label">Final Confidence</span><span class="value">' + s.confidence + '/100</span></div>' +
-      '</div>' +
-      '<div class="passage"><p><strong>' + s.companion.name + ':</strong> "' + (stars === 3 ? 'That was an incredible week. Every single day, you showed up and managed it.' : stars === 2 ? 'A really good week. You learned so much — I can see it in your confidence.' : 'First week down. It only gets easier from here. I\'m proud of you.') + '"</p></div>';
+    const tirs = s.score.timeInRange.map(v => v || 0);
+    const avg = tirs.length ? Math.round(tirs.reduce((a, b) => a + b, 0) / tirs.length) : 0;
+    const bars = DAY_NAMES.map((d, i) => {
+      const v = tirs[i] || 0;
+      return '<div class="wk-bar"><div class="wk-fill" style="height:' + v + '%"></div><span>' + d.slice(0, 3) + '</span><small>' + v + '%</small></div>';
+    }).join('');
+    return '<div class="summary-panel"><h2>Week ' + s.time.week + ' complete! 🎉</h2>' +
+      '<p style="text-align:center;margin-bottom:12px;">Time in the green zone, day by day:</p>' +
+      '<div class="wk-chart">' + bars + '</div>' +
+      '<div class="summary-stat"><span class="label">Average</span><span class="value" style="color:var(--zone-green)">' + avg + '%</span></div>' +
+      '<div class="summary-stat"><span class="label">Lows handled this week</span><span class="value">' + (s.narrative.lowsWeek || 0) + '</span></div>' +
+      '<div class="summary-stat"><span class="label">Beta Cells collected</span><span class="value" style="color:var(--accent-warm)">' + s.score.collectiblesFound.length + '/' + s.score.totalCollectibles + '</span></div>' +
+      '<div class="summary-stat"><span class="label">Confidence</span><span class="value">' + s.confidence + '</span></div></div>' +
+      '<div class="passage"><p><strong>' + s.companion.name + ':</strong> "A whole week. Every meal, every check, every low you handled. That\'s a lot of learning."</p></div>';
   },
-  onEnter: (s) => {
-    saveGame();
-    showCompanion("What a week. Ready for another?", 8000);
-  },
+  onEnter: () => { showCompanion('What a week. Ready for another?', 8000); },
   choices: [
-    { text: 'Play Another Week!', onSelect: (s) => {
+    { text: '🔁 Play another week', next: (s) => {
       s.time.week++;
-      s.time.day = 1;
       s.score.timeInRange = [];
-      // Keep collectibles, confidence, companion name
+      s.narrative.lowsWeek = 0;
+      s.narrative.eventsCompleted = [];
+      s.flags.weekComplete = false;
       startDay(1);
-    }},
-    { text: 'View Journal', onSelect: () => { openJournal(); } }
+      return null;
+    } },
+    { text: '📖 Knowledge Journal', next: () => { openJournal(); return null; } }
   ]
 });
 
 // ============================================
-// 17. SETUP PASSAGES (Title, Name, Appearance, Devices, Difficulty, Companion)
+// 17. SETUP PASSAGES (Dedication, Title, Save Slots, Character, Devices, Pace, Companion)
 // ============================================
 
-const HATS = ['—','🧢','🧶','🎽','🎀'], FACES = ['😊','😎','🙂','😄','🤓'];
-const SHIRT_COLORS = ['#5b8fb9','#e85d4a','#4caf50','#ffc107','#9c27b0'];
-const SHOES = ['👟','🥾','🩴','👞','🥿'];
+const HATS = ['', '🧢', '👒', '🎩', '🎀', '👑', '⛑️'], FACES = ['😊', '😎', '🙂', '😄', '🤓', '😺', '🤠'];
+const SHIRT_COLORS = ['#5b8fb9', '#e85d4a', '#4caf50', '#ffc107', '#9c27b0', '#ff7eb6', '#26a69a'];
+const SHOES = ['👟', '🥾', '🩴', '👞', '🥿', '🛼'];
+
+function avatarHTML(a, big) {
+  return '<div class="avatar-doll' + (big ? ' big' : '') + '">' +
+    '<span class="d-hat">' + (HATS[a.hat] || '') + '</span>' +
+    '<span class="d-face">' + (FACES[a.face] || FACES[0]) + '</span>' +
+    '<span class="d-shirt" style="background:' + (SHIRT_COLORS[a.shirt] || SHIRT_COLORS[0]) + '"></span>' +
+    '<span class="d-shoes">' + (SHOES[a.shoes] || SHOES[0]) + '</span></div>';
+}
 
 function registerSetupPassages() {
-
   addPassage('dedication', {
     noWrap: true,
     content: () => '<div class="title-screen" style="cursor:pointer;"><p style="font-style:italic;font-size:1.3em;color:#e0e0e0;">For Dr. Patricia Riley</p></div>',
@@ -3279,50 +3113,58 @@ function registerSetupPassages() {
 
   addPassage('title', {
     noWrap: true,
+    content: () => '<div class="title-screen"><div class="title-art">🍎 🤖 🩸 🥪 ⚽</div><h1>Sugar Rush</h1><p class="subtitle">A week in the life</p>' +
+      '<button class="start-btn" id="play-btn">▶ Play</button></div>',
+    onEnter: () => {
+      hideHUD();
+      setTimeout(() => document.getElementById('play-btn')?.addEventListener('click', () => renderPassage('slot-select')), 50);
+    }
+  });
+
+  addPassage('slot-select', {
+    noWrap: true,
     content: () => {
-      const hasSaveData = hasSave();
-      // ART: Title screen background illustration
-      return '<div class="title-screen"><h1>Sugar Rush</h1><p class="subtitle">A week in the life</p>' +
-        (hasSaveData ? '<button class="start-btn" id="continue-btn" style="margin-bottom:12px;">Continue</button><br>' : '') +
-        '<button class="start-btn" id="start-game-btn"' + (hasSaveData ? ' style="background:var(--accent);font-size:16px;padding:12px 36px;"' : '') + '>New Game</button></div>';
+      let html = '<div class="creation-panel"><h2>Choose a save slot</h2><p class="slot-note">💾 The game saves by itself after every step. Each slot is a separate game.</p><div class="slots">';
+      for (let n = 1; n <= SLOT_COUNT; n++) {
+        const d = readSlot(n);
+        if (d && d.player) {
+          const day = d.time ? d.time.day : 1, week = d.time ? d.time.week : 1;
+          const when = d.timestamp ? new Date(d.timestamp).toLocaleDateString() : '';
+          html += '<div class="slot-card">' + avatarHTML(d.player.appearance || {}, false) +
+            '<div class="slot-info"><strong>' + (d.player.name || 'Player') + '</strong><br><small>Week ' + week + ' · ' +
+            (d.flags && d.flags.weekComplete ? 'Week finished' : dayName(day) + ' (Day ' + day + ')') + '</small><br><small class="muted">Last played ' + when + '</small></div>' +
+            '<div class="slot-btns"><button class="modal-btn primary" data-continue="' + n + '">▶ Continue</button><button class="modal-btn" data-delete="' + n + '">🗑️</button></div></div>';
+        } else {
+          html += '<div class="slot-card empty"><div class="slot-info"><strong>Slot ' + n + '</strong><br><small class="muted">Empty</small></div>' +
+            '<div class="slot-btns"><button class="modal-btn primary" data-new="' + n + '">✨ New game</button></div></div>';
+        }
+      }
+      return html + '</div><button class="continue-btn" id="slot-back" style="margin-top:16px;">◀ Back</button></div>';
     },
-    // AUDIO: Play title screen music
     onEnter: () => {
       setTimeout(() => {
-        document.getElementById('start-game-btn')?.addEventListener('click', () => {
-          if (hasSave()) {
-            if (confirm('This will overwrite your current save. Continue?')) {
-              deleteSave();
-              renderPassage('setup-name');
-            }
-          } else {
-            renderPassage('setup-name');
-          }
-        });
-        document.getElementById('continue-btn')?.addEventListener('click', () => {
-          if (loadGame()) {
-            showHUD();
-            // Resume at the start of the current day
-            const day = state.time.day;
-            if (day === 1) {
-              renderPassage('day1-wakeup');
-            } else {
-              startDay(day);
-            }
-            showCompanion('Welcome back, ' + state.player.name + '! Picking up where we left off.');
-          }
-        });
+        document.querySelectorAll('[data-continue]').forEach(b => b.addEventListener('click', () => { if (loadGame(+b.dataset.continue)) resumeGame(); }));
+        document.querySelectorAll('[data-new]').forEach(b => b.addEventListener('click', () => { resetState(); currentSlot = +b.dataset.new; renderPassage('setup-name'); }));
+        document.querySelectorAll('[data-delete]').forEach(b => b.addEventListener('click', () => {
+          const n = +b.dataset.delete, d = readSlot(n);
+          showModal('Delete this save?', '<p>This will permanently erase <strong>' + ((d && d.player && d.player.name) || 'this game') + '</strong> in slot ' + n + '. It can\'t be undone.</p>', [
+            { text: 'Keep it', primary: true },
+            { text: '🗑️ Delete forever', danger: true, onClick: () => { deleteSlot(n); renderPassage('slot-select'); } }
+          ]);
+        }));
+        document.getElementById('slot-back')?.addEventListener('click', () => renderPassage('title'));
       }, 50);
     }
   });
 
   addPassage('setup-name', {
     noWrap: true,
-    content: () => '<div class="creation-panel"><h2>What\'s your name?</h2><div class="creation-field"><input type="text" id="player-name" placeholder="Enter your name" maxlength="20" autofocus></div><button class="continue-btn" id="name-continue">Next</button></div>',
+    content: () => '<div class="creation-panel"><h2>What\'s your name?</h2><div class="creation-field"><input type="text" id="player-name" placeholder="Enter your name" maxlength="20" autofocus></div><button class="continue-btn" id="name-continue">Next ▶</button></div>',
     onEnter: () => {
       setTimeout(() => {
         const btn = document.getElementById('name-continue'), inp = document.getElementById('player-name');
-        const go = () => { const n = inp.value.trim(); if (n) { state.player.name = n; notify(); renderPassage('setup-appearance'); } else { inp.style.borderColor = 'var(--zone-red)'; inp.focus(); } };
+        inp?.focus();
+        const go = () => { const n = inp.value.trim(); if (n) { state.player.name = n; renderPassage('setup-appearance'); } else { inp.style.borderColor = 'var(--zone-red)'; inp.focus(); } };
         btn?.addEventListener('click', go);
         inp?.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
       }, 50);
@@ -3333,21 +3175,26 @@ function registerSetupPassages() {
     noWrap: true,
     content: () => {
       const a = state.player.appearance;
-      // ART: Character paper-doll preview that updates as options are selected
-      return '<div class="creation-panel"><h2>Customize your look</h2>' +
-        '<div class="creation-field"><label>Hat</label><div class="option-picker" data-field="hat">' + HATS.map((h,i) => '<div class="option-pick' + (a.hat===i?' selected':'') + '" data-index="'+i+'">'+h+'</div>').join('') + '</div></div>' +
-        '<div class="creation-field"><label>Face</label><div class="option-picker" data-field="face">' + FACES.map((f,i) => '<div class="option-pick' + (a.face===i?' selected':'') + '" data-index="'+i+'">'+f+'</div>').join('') + '</div></div>' +
-        '<div class="creation-field"><label>Shirt</label><div class="option-picker" data-field="shirt">' + SHIRT_COLORS.map((c,i) => '<div class="option-pick' + (a.shirt===i?' selected':'') + '" data-index="'+i+'"><span style="display:block;width:32px;height:32px;border-radius:6px;background:'+c+'"></span></div>').join('') + '</div></div>' +
-        '<div class="creation-field"><label>Shoes</label><div class="option-picker" data-field="shoes">' + SHOES.map((s,i) => '<div class="option-pick' + (a.shoes===i?' selected':'') + '" data-index="'+i+'">'+s+'</div>').join('') + '</div></div>' +
-        '<button class="continue-btn" id="appearance-continue">Next</button></div>';
+      const row = (label, field, list, render) => '<div class="creation-field"><label>' + label + '</label><div class="option-picker" data-field="' + field + '">' +
+        list.map((v, i) => '<div class="option-pick' + (a[field] === i ? ' selected' : '') + '" data-index="' + i + '">' + render(v) + '</div>').join('') + '</div></div>';
+      return '<div class="creation-panel"><h2>Make your look</h2><div class="appearance-layout"><div class="doll-preview" id="doll-preview">' + avatarHTML(a, true) + '<div class="doll-name">' + state.player.name + '</div></div><div>' +
+        row('Hat', 'hat', HATS, v => v || '🚫') +
+        row('Face', 'face', FACES, v => v) +
+        row('Shirt', 'shirt', SHIRT_COLORS, c => '<span style="display:block;width:32px;height:32px;border-radius:6px;background:' + c + '"></span>') +
+        row('Shoes', 'shoes', SHOES, v => v) +
+        '</div></div><button class="continue-btn" id="appearance-continue">Next ▶</button></div>';
     },
     onEnter: () => {
       setTimeout(() => {
         document.querySelectorAll('.option-picker').forEach(p => {
           const f = p.dataset.field;
-          p.querySelectorAll('.option-pick').forEach(o => {
-            o.addEventListener('click', () => { p.querySelectorAll('.option-pick').forEach(x => x.classList.remove('selected')); o.classList.add('selected'); state.player.appearance[f] = parseInt(o.dataset.index); });
-          });
+          p.querySelectorAll('.option-pick').forEach(o => o.addEventListener('click', () => {
+            p.querySelectorAll('.option-pick').forEach(x => x.classList.remove('selected'));
+            o.classList.add('selected');
+            state.player.appearance[f] = parseInt(o.dataset.index, 10);
+            document.getElementById('doll-preview').innerHTML = avatarHTML(state.player.appearance, true) + '<div class="doll-name">' + state.player.name + '</div>';
+            document.querySelector('#doll-preview .avatar-doll').classList.add('bounce');
+          }));
         });
         document.getElementById('appearance-continue')?.addEventListener('click', () => renderPassage('setup-devices'));
       }, 50);
@@ -3358,19 +3205,22 @@ function registerSetupPassages() {
     noWrap: true,
     content: () => '<div class="creation-panel"><h2>How do you manage your diabetes?</h2>' +
       '<div class="creation-field"><label>How do you take your insulin?</label><div class="device-choice" data-field="insulin">' +
-      '<div class="device-option' + (state.player.device.insulin==='pump'?' selected':'') + '" data-value="pump"><h3>Insulin Pump</h3><p>A small device that delivers insulin throughout the day.</p></div>' +
-      '<div class="device-option' + (state.player.device.insulin==='injections'?' selected':'') + '" data-value="injections"><h3>Injections</h3><p>An insulin pen or syringe. Long-acting daily, fast-acting at meals.</p></div></div></div>' +
+      '<div class="device-option' + (state.player.device.insulin === 'pump' ? ' selected' : '') + '" data-value="pump"><div class="dev-emoji">🎛️</div><h3>Insulin Pump</h3><p>A small device that gives insulin all day.</p></div>' +
+      '<div class="device-option' + (state.player.device.insulin === 'injections' ? ' selected' : '') + '" data-value="injections"><div class="dev-emoji">🖊️</div><h3>Injections</h3><p>An insulin pen or syringe.</p></div></div></div>' +
       '<div class="creation-field"><label>How do you check your blood sugar?</label><div class="device-choice" data-field="bgMonitor">' +
-      '<div class="device-option' + (state.player.device.bgMonitor==='cgm'?' selected':'') + '" data-value="cgm"><h3>CGM</h3><p>A sensor that checks your blood sugar continuously.</p></div>' +
-      '<div class="device-option' + (state.player.device.bgMonitor==='fingerprick'?' selected':'') + '" data-value="fingerprick"><h3>Finger Pricks</h3><p>You prick your finger and use a meter. You\'re the detective.</p></div></div></div>' +
-      '<button class="continue-btn" id="devices-continue">Next</button></div>',
+      '<div class="device-option' + (state.player.device.bgMonitor === 'cgm' ? ' selected' : '') + '" data-value="cgm"><div class="dev-emoji">📡</div><h3>CGM</h3><p>A sensor that checks all the time.</p></div>' +
+      '<div class="device-option' + (state.player.device.bgMonitor === 'fingerprick' ? ' selected' : '') + '" data-value="fingerprick"><div class="dev-emoji">🩸</div><h3>Finger Pokes</h3><p>A meter and a quick poke. You\'re the detective.</p></div></div></div>' +
+      '<p class="slot-note">Both ways work. Pick whatever matches you, or whatever you\'re curious about.</p>' +
+      '<button class="continue-btn" id="devices-continue">Next ▶</button></div>',
     onEnter: () => {
       setTimeout(() => {
         document.querySelectorAll('.device-choice').forEach(g => {
           const f = g.dataset.field;
-          g.querySelectorAll('.device-option').forEach(o => {
-            o.addEventListener('click', () => { g.querySelectorAll('.device-option').forEach(x => x.classList.remove('selected')); o.classList.add('selected'); state.player.device[f] = o.dataset.value; });
-          });
+          g.querySelectorAll('.device-option').forEach(o => o.addEventListener('click', () => {
+            g.querySelectorAll('.device-option').forEach(x => x.classList.remove('selected'));
+            o.classList.add('selected');
+            state.player.device[f] = o.dataset.value;
+          }));
         });
         document.getElementById('devices-continue')?.addEventListener('click', () => renderPassage('setup-difficulty'));
       }, 50);
@@ -3380,15 +3230,20 @@ function registerSetupPassages() {
   addPassage('setup-difficulty', {
     noWrap: true,
     content: () => '<div class="creation-panel"><h2>Choose your pace</h2><div class="difficulty-choice">' +
-      '<div class="difficulty-option' + (state.player.difficulty==='learning'?' selected':'') + '" data-value="learning"><h3>Learning the Ropes</h3><p>I\'m new to this and want help along the way.</p></div>' +
-      '<div class="difficulty-option' + (state.player.difficulty==='gotthis'?' selected':'') + '" data-value="gotthis"><h3>I\'ve Got This</h3><p>I know some stuff. Let me figure things out.</p></div>' +
-      '</div><button class="continue-btn" id="diff-continue" style="margin-top:24px">Start Day 1</button></div>',
+      '<div class="difficulty-option' + (state.player.difficulty === 'learning' ? ' selected' : '') + '" data-value="learning"><h3>🌱 Learning the Ropes</h3><p>I\'m new to this. Show me tips along the way.</p></div>' +
+      '<div class="difficulty-option' + (state.player.difficulty === 'gotthis' ? ' selected' : '') + '" data-value="gotthis"><h3>🚀 I\'ve Got This</h3><p>I know some stuff. Fewer tips, please.</p></div>' +
+      '</div><button class="continue-btn" id="diff-continue" style="margin-top:24px">Next ▶</button></div>',
     onEnter: () => {
       setTimeout(() => {
-        document.querySelectorAll('.difficulty-option').forEach(o => {
-          o.addEventListener('click', () => { document.querySelectorAll('.difficulty-option').forEach(x => x.classList.remove('selected')); o.classList.add('selected'); state.player.difficulty = o.dataset.value; });
+        document.querySelectorAll('.difficulty-option').forEach(o => o.addEventListener('click', () => {
+          document.querySelectorAll('.difficulty-option').forEach(x => x.classList.remove('selected'));
+          o.classList.add('selected');
+          state.player.difficulty = o.dataset.value;
+        }));
+        document.getElementById('diff-continue')?.addEventListener('click', () => {
+          state.flags.tipsOff = state.player.difficulty === 'gotthis';
+          renderPassage('setup-companion');
         });
-        document.getElementById('diff-continue')?.addEventListener('click', () => renderPassage('setup-companion'));
       }, 50);
     }
   });
@@ -3396,23 +3251,23 @@ function registerSetupPassages() {
   addPassage('setup-companion', {
     noWrap: true,
     content: () => '<div class="creation-panel"><h2>One more thing...</h2>' +
-      // ART: Companion robot floating entrance animation
-      '<p>A small robot floats into view. Glowing screen face, tiny antenna, an expression that\'s both friendly and slightly apologetic.</p>' +
-      '<p><strong>"Hey, ' + state.player.name + '. I\'m your new companion. Your pancreas decided to take early retirement. Rude, honestly. That\'s where I come in."</strong></p>' +
-      '<p>The robot does a little spin.</p>' +
-      '<p><strong>"I\'ll be here all week. Want to give me a name?"</strong></p>' +
-      '<div class="creation-field" style="margin-top:16px"><input type="text" id="companion-name" placeholder="Name your companion" value="Pip" maxlength="15"></div>' +
-      '<button class="continue-btn" id="comp-continue">Let\'s go!</button></div>',
+      '<div class="pip-intro">🤖</div>' +
+      '<p>A small robot floats into view and does a little spin.</p>' +
+      '<p><strong>"Hi, ' + state.player.name + '! I\'m your helper for the week. Your pancreas took early retirement, so I\'m here to help you learn the ropes."</strong></p>' +
+      '<p><strong>"Want to give me a name?"</strong></p>' +
+      '<div class="creation-field" style="margin-top:16px"><input type="text" id="companion-name" placeholder="Name your helper" value="Pip" maxlength="15"></div>' +
+      '<button class="continue-btn" id="comp-continue">Let\'s go! ▶</button></div>',
     onEnter: () => {
       // AUDIO: Play companion intro jingle
       setTimeout(() => {
         document.getElementById('comp-continue')?.addEventListener('click', () => {
           state.companion.name = (document.getElementById('companion-name')?.value.trim()) || 'Pip';
+          document.getElementById('pip-nametag').textContent = state.companion.name;
           state.flags.setupComplete = true;
-          notify();
+          state.time.day = 1; state.time.hour = 7.0; state.time.week = 1;
+          resetDayScore();
           showHUD();
           renderPassage('day1-wakeup');
-          showCompanion('Alright, ' + state.player.name + '. Day 1. Let\'s do this.');
         });
       }, 50);
     }
@@ -3420,324 +3275,238 @@ function registerSetupPassages() {
 }
 
 // ============================================
-// 18. DAY 1 PASSAGES (Tutorial — fully scripted)
+// 18. DAY 1 (Monday): tutorial, one idea at a time
 // ============================================
+// Each part of the screen is introduced when it first matters, with a short tip
+// pointing at it. Tips show once per save and can be switched off.
 
 function registerDay1Passages() {
+  const D1_BREAKFAST = [
+    { name: 'Cereal with milk', carbs: 45, speed: 'fast', desc: 'A big bowl.' },
+    { name: 'Toast with seed butter', carbs: 30, speed: 'slow', desc: 'Two slices of whole wheat.' },
+    { name: 'Scrambled eggs on toast', carbs: 15, speed: 'slow', desc: 'One slice of toast with eggs.' }
+  ];
+  const D1_LUNCH = [
+    { name: 'Cheese pizza slice', carbs: 30, speed: 'slow' },
+    { name: 'Chicken wrap', carbs: 25, speed: 'slow' },
+    { name: 'Pasta with sauce', carbs: 50, speed: 'slow' }
+  ];
+
   addPassage('day1-wakeup', {
     content: (s) => {
-      const isCGM = s.player.device.bgMonitor === 'cgm';
-      // ART: Scene background — bedroom morning
-      return '<h2>Day 1 — Morning</h2>' +
-        '<p class="passage-scene">Your bedroom. Morning light through the curtains. The alarm goes off.</p>' +
-        '<p>You open your eyes. First day of managing things yourself.</p>' +
-        (isCGM
-          ? '<p>You glance at your CGM. The number reads <strong>' + s.bg.current.toFixed(1) + '</strong>. The green zone is <strong>5 to 12</strong> — you\'re right in it.</p>'
-          : '<p>You reach for your meter. A quick prick... <strong>' + s.bg.current.toFixed(1) + '</strong>. The green zone is <strong>5 to 12</strong> — you\'re right in it.</p>');
+      const cgm = s.player.device.bgMonitor === 'cgm';
+      return sceneArt('🌅', ['🛏️ ⏰ 🎒', '🪟 ☀️ 🧸'], 'morning') +
+        '<h2>Monday Morning</h2>' +
+        '<p class="passage-scene">Your alarm goes off.</p>' +
+        '<p>' + (cgm ? 'You glance at your CGM' : 'You do a quick finger poke') + ': <strong>' + s.bg.current.toFixed(1) + '</strong>. In the green zone.</p>';
     },
-    // AUDIO: Play morning ambient track
-    onEnter: (s) => { s.time.hour = 7.0; s.bg.current = 7.2; s.bg.trend = 'stable'; notify(); showCompanion('Morning, ' + s.player.name + '! ' + s.bg.current.toFixed(1) + ' — right in the green.'); },
-    next: 'day1-hud-explain', continueText: 'Continue'
+    onEnter: (s) => { s.time.hour = 7.0; s.bg.current = 7.2; s.bg.trend = 'stable'; notify(); },
+    afterRender: (s) => {
+      tutorialTip('bg', '#hud-bg', 'This is your <strong>blood sugar</strong> (BG). The <strong style="color:#4caf50">green zone is 5 to 10</strong>.' + (s.player.device.bgMonitor === 'cgm' ? ' The arrow shows which way it\'s heading.' : ''));
+      tutorialTip('avatar', '#hud-avatar', 'That\'s you, ' + s.player.name + '!');
+      tutorialTip('pip', '#companion-face', 'And that\'s me, ' + s.companion.name + '. I\'ll pop up with help. <strong>Tap me any time</strong> for a hint. If I start flashing, check your BG!');
+    },
+    next: 'day1-breakfast', continueText: '🍳 Breakfast'
   });
 
-  addPassage('day1-hud-explain', {
-    content: (s) => '<h2>Your Dashboard</h2>' +
-      '<p><strong>' + s.companion.name + '</strong> gestures to the bar at the top.</p>' +
-      '<p><strong>"That\'s your blood sugar meter. Green = in range. It moves based on food, insulin, and activity."</strong></p>' +
-      '<p><strong>"Energy shows how you feel. In range = full energy."</strong></p>' +
-      '<p><strong>"Confidence is at ' + s.confidence + '. It\'ll grow as you learn."</strong></p>',
-    onEnter: () => { if (collectBetaCell('what-is-blood-sugar')) setTimeout(() => showBetaCellNotification('What is Blood Sugar?', 'blue'), 500); },
-    next: 'day1-breakfast-intro', continueText: 'Time for breakfast'
+  addPassage('day1-breakfast', {
+    content: () => sceneArt(D1_BREAKFAST.map(f => foodEmoji(f.name)).join(' '), ['🏠 🍽️'], 'morning') +
+      '<h2>Breakfast</h2><div class="food-list">' + D1_BREAKFAST.map(f =>
+        '<div class="food-row"><span class="food-emoji">' + foodEmoji(f.name) + '</span><div><strong>' + f.name + '</strong> <span class="carb-tag">~' + f.carbs + 'g carbs</span><br><small>' + f.desc + '</small></div></div>').join('') + '</div>',
+    onEnter: () => { advanceTime(0.25); showCompanion('Any of these is fine. They just have different carbs.'); },
+    choices: D1_BREAKFAST.map(f => ({
+      text: foodEmoji(f.name) + ' ' + f.name,
+      onSelect: (s) => { s.narrative.choices['bk'] = f; },
+      next: 'day1-breakfast-routine'
+    }))
   });
 
-  addPassage('day1-breakfast-intro', {
-    content: (s) => '<h2>Breakfast</h2>' +
-      // ART: Scene background — kitchen morning
-      '<p class="passage-scene">The kitchen. Something smells good.</p>' +
-      '<p>Different foods = different carbs. Let\'s look at your options.</p>',
-    onEnter: () => { advanceTime(0.5); showCompanion("Different foods, different carbs. None of these are wrong."); },
-    next: 'day1-breakfast-choice'
-  });
-
-  addPassage('day1-breakfast-choice', {
-    content: () => '<h2>What\'s for breakfast?</h2>' +
-      '<table class="meal-options"><tr><td><strong>Cereal with milk</strong></td><td><strong>45g carbs</strong></td></tr>' +
-      '<tr><td><strong>Toast with peanut butter</strong></td><td><strong>30g</strong></td></tr>' +
-      '<tr><td><strong>Scrambled eggs on toast</strong></td><td><strong>20g</strong></td></tr></table>',
-    choices: [
-      { id: 'cereal', text: 'Cereal with milk (45g)', onSelect: (s) => { s.narrative.choices['bk-carbs'] = 45; }, next: 'day1-breakfast-dose' },
-      { id: 'toast', text: 'Toast with PB (30g)', onSelect: (s) => { s.narrative.choices['bk-carbs'] = 30; }, next: 'day1-breakfast-dose' },
-      { id: 'eggs', text: 'Eggs on toast (20g)', onSelect: (s) => { s.narrative.choices['bk-carbs'] = 20; }, next: 'day1-breakfast-dose' }
-    ]
-  });
-
-  addPassage('day1-breakfast-dose', {
+  addPassage('day1-breakfast-routine', {
     content: (s) => {
-      const c = s.narrative.choices['bk-carbs'], d = recommendedDose(c, s.bg.current);
-      return '<h2>Insulin Time</h2>' +
-        '<p><strong>' + c + 'g carbs</strong>. Ratio: 1 unit per 10g. That\'s about <strong>' + d + ' units</strong>.</p>' +
-        (s.player.difficulty === 'learning' ? '<p>' + s.companion.name + ': "' + c + ' ÷ 10 = ' + (c/10) + ' units."</p>' : '') +
-        '<div class="dose-input-group"><label>Dose:</label><input type="number" class="dose-input" id="dose-val" value="' + d + '" min="0" max="20" step="0.5"><span class="dose-unit">units</span><button class="dose-confirm" id="dose-btn">Confirm</button></div>';
+      const f = s.narrative.choices['bk'];
+      return '<h2>Mealtime Routine</h2>' +
+        '<div class="routine"><div class="r-step done">✅ 🩸 Check BG: ' + s.bg.current.toFixed(1) + '</div>' +
+        '<div class="r-step done">✅ 🔢 Count the carbs: ' + f.carbs + 'g</div>' +
+        '<div class="r-step now">⬜ ' + (s.player.device.insulin === 'pump' ? '🎛️' : '🖊️') + ' Take your mealtime insulin</div></div>' +
+        '<div class="tip-box">💡 Your diabetes team gives you a <strong>plan</strong> that turns carbs into an insulin dose. Everyone\'s plan is different. In this game, your plan is built in, so your job is knowing the carbs.</div>';
     },
-    onEnter: (s) => {
-      setTimeout(() => {
-        document.getElementById('dose-btn')?.addEventListener('click', () => {
-          const dose = parseFloat(document.getElementById('dose-val')?.value) || 0;
-          eatFood(s.narrative.choices['bk-carbs'], 'fast'); doseInsulin(dose);
-          s.narrative.choices['bk-dose'] = dose; s.score.mealsManaged++;
-          notify(); renderPassage('day1-breakfast-result');
-        });
-      }, 50);
-    }
+    choices: (s) => [{
+      text: s.player.device.insulin === 'pump' ? '🎛️ Enter the carbs in my pump' : '🖊️ Take my mealtime insulin with my pen',
+      onSelect: (st) => { const f = st.narrative.choices['bk']; eatMeal(f.carbs, f.speed); },
+      next: 'day1-breakfast-done'
+    }]
   });
 
-  addPassage('day1-breakfast-result', {
-    content: (s) => {
-      const c = s.narrative.choices['bk-carbs'], d = s.narrative.choices['bk-dose'], ideal = recommendedDose(c, 7.2);
-      const diff = Math.abs(d - ideal);
-      const fb = diff <= 0.5 ? "Perfect dose." : diff <= 1.5 ? "Close enough!" : "A bit off, but this is day one.";
-      return '<h2>Breakfast Done</h2><p>' + s.companion.name + ': "' + fb + '"</p>' +
-        '<p>BG rises from carbs... then insulin kicks in. Smooth.</p>';
-    },
+  addPassage('day1-breakfast-done', {
+    content: (s) => sceneArt('😋', ['🍽️ ✨'], 'morning') + '<h2>Breakfast Done</h2>' +
+      '<p>BG will go up a bit as the food digests, then come back down as the insulin works.</p>',
     onEnter: () => {
-      tick(0.5); advanceTime(0.5); tick(0.5); advanceTime(0.5); tick(0.5); advanceTime(0.5);
-      if (collectBetaCell('what-are-carbs')) setTimeout(() => showBetaCellNotification('What are Carbs?', 'blue'), 800);
-      showCompanion(contextualCompanionLine('afterMealGood'));
+      tick(0.5); advanceTime(0.5);
+      collectBetaCell('what-are-carbs');
+      setTimeout(() => showBetaCellNotification('What are Carbs?', 'blue'), 300);
     },
+    afterRender: () => { tutorialTip('cells', '#hud-collectibles', 'You found a <strong>Beta Cell</strong>! Each one is a fact to keep. <strong>Tap here</strong> any time to read them in your Knowledge Journal.'); },
     next: 'day1-morning-snack', continueText: 'Continue'
   });
 
   addPassage('day1-morning-snack', {
-    content: (s) => '<h2>Morning Snack</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong> — ' + getBGZone(s.bg.current).label + '</p>',
-    choices: [
-      { text: 'Apple slices (~15g)', onSelect: (s) => { eatFood(15,'fast'); s.score.snacksRemembered++; }, next: 'day1-morning-game' },
-      { text: 'Cheese and crackers (~15g)', onSelect: (s) => { eatFood(15,'slow'); s.score.snacksRemembered++; }, next: 'day1-morning-game' },
-      { text: 'Almonds (~5g)', onSelect: (s) => { eatFood(5,'slow'); s.score.snacksRemembered++; }, next: 'day1-morning-game' }
-    ]
+    content: (s) => sceneArt('🏫 🍎', ['🎒 ✏️ 📚'], 'day') + '<h2>Recess Snack</h2>' +
+      '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. ' + snackAdvice(s.bg.current) + '</p>',
+    onEnter: () => { advanceTime(2.0); tick(1.5); },
+    choices: () => snackChoices(1, 3).map(sn => ({
+      text: sn.emoji + ' ' + sn.name + ' <span class="carb-tag">~' + sn.carbs + 'g · ' + sn.tag + '</span>',
+      onSelect: () => eatSnack(sn.carbs, sn.speed),
+      next: 'day1-morning-game'
+    })),
+    afterRender: () => { tutorialTip('energy', '#hud-energy', '<strong>Energy</strong> shows how you feel. It fills up when BG is in the green zone, and drains when BG is too high or too low.'); }
   });
 
   addPassage('day1-morning-game', {
-    content: (s) => '<h2>Carb Counter</h2>' +
-      // TODO: MINI-GAME HOOK — Replace with actual Carb Counter tutorial mini-game
-      // The mini-game should: Show food items, player builds a plate hitting a target carb range
-      // It should return: { score: 0-3, bgEffect: number, collectible: 'carbs-everywhere' }
-      '<p><em>Mini-game — simulating result.</em></p>',
-    // AUDIO: Play mini-game start jingle
+    content: () => sceneArt('🥪', ['🎮 ✨'], 'day') + '<h2>Mini-game: Carb Counter</h2><p class="passage-scene">Twice a day there\'s a mini-game. This one is about counting carbs.</p>',
     onEnter: () => { advanceTime(0.5); tick(0.5); },
-    choices: [{ text: 'Play Carb Counter (simulated)', next: 'day1-morning-game-result' }]
-  });
-
-  addPassage('day1-morning-game-result', {
-    content: () => '<h2>Nice!</h2><p>You\'re learning which foods carry the carbs.</p>' +
-      '<p><strong>Did you know?</strong> Rice and pasta: ~40-45g per cup. Broccoli: almost none.</p>',
-    onEnter: () => {
-      tick(0.5); advanceTime(0.5);
-      if (collectBetaCell('carbs-everywhere')) setTimeout(() => showBetaCellNotification('Carbs Are Everywhere', 'green'), 500);
-      showCompanion("Carbs aren't the enemy. You just need to know where they are.");
-    },
-    next: 'day1-lunch', continueText: 'Continue to lunch'
+    choices: [{ text: '▶ Play Carb Counter', next: () => { playMiniGame('Carb Counter', { tier: 1 }, 'day1-lunch'); return null; } }]
   });
 
   addPassage('day1-lunch', {
-    content: () => '<h2>Lunch</h2>' +
-      // ART: Scene background — school cafeteria
-      '<p class="passage-scene">The cafeteria.</p>' +
-      '<table class="meal-options"><tr><td><strong>Cheese pizza</strong></td><td><strong>~30g</strong></td></tr>' +
-      '<tr><td><strong>Chicken wrap</strong></td><td><strong>~25g</strong></td></tr>' +
-      '<tr><td><strong>Pasta</strong></td><td><strong>~50g</strong></td></tr></table>',
-    onEnter: () => { advanceTime(2.0); tick(1.0); },
-    choices: [
-      { text: 'Pizza (~30g)', onSelect: (s) => { eatFood(30,'slow'); doseInsulin(recommendedDose(30,s.bg.current)); s.score.mealsManaged++; }, next: 'day1-lunch-social' },
-      { text: 'Wrap (~25g)', onSelect: (s) => { eatFood(25,'fast'); doseInsulin(recommendedDose(25,s.bg.current)); s.score.mealsManaged++; }, next: 'day1-lunch-social' },
-      { text: 'Pasta (~50g)', onSelect: (s) => { eatFood(50,'slow'); doseInsulin(recommendedDose(50,s.bg.current)); s.score.mealsManaged++; }, next: 'day1-lunch-social' }
-    ]
+    content: () => sceneArt(D1_LUNCH.map(f => foodEmoji(f.name)).join(' '), ['🏫 🍽️ 🧒🧒'], 'day') +
+      '<h2>Lunch</h2><p class="passage-scene">The cafeteria.</p>',
+    onEnter: () => { advanceTime(1.0); tick(1.0); },
+    choices: D1_LUNCH.map(f => ({
+      text: foodEmoji(f.name) + ' ' + f.name + ' <span class="carb-tag">~' + f.carbs + 'g</span>',
+      onSelect: () => { eatMeal(f.carbs, f.speed); tick(0.25); },
+      next: 'day1-lunch-social'
+    })),
+    afterRender: () => { tutorialTip('clock', '#hud-time', 'The <strong>day and time</strong>. Each day has meals, snacks and a couple of mini-games, from Monday to Sunday.'); }
   });
 
   addPassage('day1-lunch-social', {
-    content: (s) => '<h2>A Friend Sits Down</h2><p>Mia: "Hey! What\'s ' + (s.player.device.insulin==='pump'?'the thing on your belt':'that pen you just used') + '?"</p>',
-    onEnter: () => { tick(0.25); showCompanion("Your call. No wrong answer."); },
+    content: (s) => sceneArt('🧒 💬 🧒', [], 'day') + '<h2>A Friend Sits Down</h2><p>Mia: "Hey! What\'s ' + (s.player.device.insulin === 'pump' ? 'that thing on your belt' : 'that pen you just used') + '?"</p>',
+    onEnter: () => { showCompanion('Your call. There\'s no wrong answer.'); },
     choices: (s) => [
-      { text: '"It\'s my insulin ' + (s.player.device.insulin==='pump'?'pump':'pen') + '. It helps me manage my diabetes."', onSelect: () => { state.narrative.choices['d1-social']='explain'; updateConfidence(5); }, next: 'day1-lunch-response' },
-      { text: s.player.device.insulin==='pump' ? '"Basically a tiny computer that gives me medicine."' : '"It\'s like a needle, but for medicine I need every day."', onSelect: () => { state.narrative.choices['d1-social']='casual'; updateConfidence(5); }, next: 'day1-lunch-response' },
-      { text: '"I\'d rather not talk about it right now."', onSelect: () => { state.narrative.choices['d1-social']='deflect'; updateConfidence(5); }, next: 'day1-lunch-response' }
+      { text: '"It\'s my insulin ' + (s.player.device.insulin === 'pump' ? 'pump' : 'pen') + '. I have diabetes."', onSelect: () => { state.narrative.choices['d1-social'] = 'explain'; updateConfidence(5); }, next: 'day1-lunch-response' },
+      { text: s.player.device.insulin === 'pump' ? '"Basically a tiny computer that gives me medicine."' : '"It gives me medicine I need every day."', onSelect: () => { state.narrative.choices['d1-social'] = 'casual'; updateConfidence(5); }, next: 'day1-lunch-response' },
+      { text: '"I\'d rather not talk about it right now."', onSelect: () => { state.narrative.choices['d1-social'] = 'deflect'; updateConfidence(5); }, next: 'day1-lunch-response' }
     ]
   });
 
   addPassage('day1-lunch-response', {
     content: (s) => {
-      const r = { explain: '"Oh cool! Does it hurt?" Genuine curiosity.', casual: '"No way, can I see?" She\'s fascinated.', deflect: '"Okay! Want some chips?" She moves right on.' };
-      return '<p><strong>' + r[s.narrative.choices['d1-social']] + '</strong></p>' +
-        '<p><strong>' + s.companion.name + ':</strong> "Talking about T1D gets easier with practice. Both sharing and not sharing are fine."</p>';
+      const r = { explain: '"Oh cool! Does it hurt?"', casual: '"No way, can I see?"', deflect: '"Okay! Want some carrot sticks?"' };
+      return '<p>Mia: <strong>' + r[s.narrative.choices['d1-social']] + '</strong></p>' +
+        '<p><strong>' + s.companion.name + ':</strong> "Sharing and not sharing are both fine. It\'s up to you."</p>';
     },
     onEnter: () => { if (collectBetaCell('talking-to-friends')) setTimeout(() => showBetaCellNotification('Talking to Friends About T1D', 'gold'), 500); },
-    next: 'day1-pm-snack', continueText: 'Continue'
+    afterRender: () => { tutorialTip('conf', '#hud-confidence', '<strong>Confidence</strong> grows as you learn and try things. In conversations there are no wrong answers.'); },
+    next: 'day1-hypo', continueText: 'Continue'
   });
 
-  addPassage('day1-pm-snack', {
-    content: (s) => '<h2>Afternoon Snack</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong></p>',
-    onEnter: () => { advanceTime(2.0); tick(1.0); },
-    choices: [
-      { text: 'Granola bar (~20g)', onSelect: (s) => { eatFood(20,'slow'); s.score.snacksRemembered++; }, next: 'day1-hypo' },
-      { text: 'Yogurt (~15g)', onSelect: (s) => { eatFood(15,'fast'); s.score.snacksRemembered++; }, next: 'day1-hypo' },
-      { text: 'Trail mix (~10g)', onSelect: (s) => { eatFood(10,'slow'); s.score.snacksRemembered++; }, next: 'day1-hypo' }
-    ]
-  });
-
-  // Hypo tutorial
+  // The first low: gym class. Uses the real low-BG rescue flow, which teaches as it goes.
   addPassage('day1-hypo', {
-    content: () => '<h2>Something Feels Off</h2><p>Shaky hands. Wobbly vision. Fast heartbeat.</p><p>BG: <strong>4.2</strong>. Below 5. You\'re going low.</p>',
-    onEnter: (s) => { s.bg.current = 4.2; s.bg.trend = 'falling'; advanceTime(0.5); notify(); showCompanion('You\'re low. Let\'s handle it.'); },
-    next: 'day1-hypo-lesson', continueText: 'What do I do?'
-  });
-
-  addPassage('day1-hypo-lesson', {
-    content: (s) => '<h2>The 15-15 Rule</h2><p><strong>' + s.companion.name + ':</strong></p>' +
-      '<ol><li><strong>15 grams</strong> of fast-acting sugar</li><li>Wait <strong>15 minutes</strong></li><li>Recheck. If still low, repeat.</li></ol>' +
-      '<p>"Fast-acting = juice, glucose tabs, regular soda. NOT chocolate. NOT diet soda."</p>',
-    choices: [
-      { text: 'Juice box (15g, fast)', onSelect: (s) => { s.narrative.choices['hypo']='perfect'; }, next: 'day1-hypo-result' },
-      { text: 'Glucose tabs x3 (15g, fast)', onSelect: (s) => { s.narrative.choices['hypo']='perfect'; }, next: 'day1-hypo-result' },
-      { text: 'Candy bar (30g, has fat)', onSelect: (s) => { s.narrative.choices['hypo']='toomuch'; }, next: 'day1-hypo-result' },
-      { text: 'Diet soda (0g sugar)', onSelect: (s) => { s.narrative.choices['hypo']='nosugar'; }, next: 'day1-hypo-result' }
-    ]
-  });
-
-  addPassage('day1-hypo-result', {
-    content: (s) => {
-      const t = s.narrative.choices['hypo'];
-      if (t === 'perfect') return '<h2>Good call.</h2><p>15g fast sugar. 15 minutes... <strong>5.8</strong>. Back in the green.</p>';
-      if (t === 'toomuch') return '<h2>That\'ll work, but...</h2><p>30g is double what you need. You\'ll rebound high. <strong>8.5</strong>.</p>';
-      return '<h2>That won\'t help.</h2><p>Diet soda = 0 sugar. You grab juice instead. <strong>5.8</strong>.</p>';
-    },
-    onEnter: (s) => {
-      if (s.narrative.choices['hypo'] === 'toomuch') { s.bg.current = 8.5; eatFood(30,'slow'); }
-      else { s.bg.current = 5.8; eatFood(15,'fast'); }
-      s.bg.trend = 'rising'; notify();
-      if (collectBetaCell('fifteen-fifteen-rule')) setTimeout(() => showBetaCellNotification('The 15-15 Rule', 'green'), 800);
-    },
-    next: 'day1-late-snack', continueText: 'Continue'
-  });
-
-  addPassage('day1-late-snack', {
-    content: (s) => '<h2>Late Afternoon Snack</h2><p>' + s.companion.name + ': "After that low, your body needs fuel."</p>',
-    onEnter: () => { advanceTime(1.5); tick(0.5); },
-    choices: [
-      { text: 'Cheese and crackers (~15g)', onSelect: (s) => { eatFood(15,'slow'); s.score.snacksRemembered++; }, next: 'day1-dinner' },
-      { text: 'Apple with PB (~20g)', onSelect: (s) => { eatFood(20,'slow'); s.score.snacksRemembered++; }, next: 'day1-dinner' }
-    ]
+    content: () => sceneArt('🏐 🏃', ['🏫 💦'], 'day') + '<h2>Gym Class</h2>' +
+      '<p class="passage-scene">Dodgeball, the whole period. Walking back to class, your legs feel wobbly and your hands feel shaky.</p>',
+    onEnter: (s) => { s.time.hour = 14.0; s.carbs.pending = []; s.insulin.pendingDoses = []; s.bg.current = 3.7; s.bg.trend = 'falling'; notify(); showCompanion('Something feels off. Check your BG!'); },
+    next: () => { startLowRescue('day1-dinner', false); return null; }, continueText: '🩸 Check BG'
   });
 
   addPassage('day1-dinner', {
-    content: (s) => '<h2>Dinner</h2>' +
-      // ART: Scene background — home kitchen evening
-      '<p class="passage-scene">Home. Stir-fry: rice, chicken, veggies. No label.</p>' +
-      '<p>' + s.companion.name + ': "Rice ~45g, chicken ~0, veggies ~5. Total ~50g."</p><p>How many carbs?</p>',
-    onEnter: () => { advanceTime(1.5); tick(1.0); },
-    choices: [
-      { text: 'About 25g', onSelect: (s) => { s.narrative.choices['d1-dinner']=25; }, next: 'day1-dinner-result' },
-      { text: 'About 50g', onSelect: (s) => { s.narrative.choices['d1-dinner']=50; }, next: 'day1-dinner-result' },
-      { text: 'About 75g', onSelect: (s) => { s.narrative.choices['d1-dinner']=75; }, next: 'day1-dinner-result' }
-    ]
-  });
-
-  addPassage('day1-dinner-result', {
-    content: (s) => {
-      const e = s.narrative.choices['d1-dinner'], diff = Math.abs(e - 50);
-      const fb = diff <= 10 ? "About 50g — nice!" : e < 50 ? (e + "g is a bit low." ) : (e + "g is a bit high.");
-      return '<p>' + s.companion.name + ': "' + fb + ' Estimating gets easier."</p>';
-    },
-    onEnter: (s) => {
-      eatFood(50,'slow'); doseInsulin(recommendedDose(50,s.bg.current)); s.score.mealsManaged++;
-      tick(0.5); advanceTime(0.5);
-      if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification('Estimating Carbs Without Labels', 'green'), 800);
-    },
-    next: 'day1-dinner-social', continueText: 'Continue'
+    content: () => sceneArt('🥢 🍚 🍗 🥦', ['🏠 🍽️'], 'evening') + '<h2>Dinner</h2>' +
+      '<p class="passage-scene">Stir-fry: about one cup of rice, chicken and veggies. No label.</p>' +
+      '<p>About how many carbs? <small>(Rice is the big one. Chicken has almost none.)</small></p>',
+    onEnter: () => { state.time.hour = 17.5; tick(1.5); },
+    quiz: () => ({
+      options: [
+        { text: '🍚 About 15g', correct: false, feedback: 'A bit low. A cup of rice has a lot more than that.' },
+        { text: '🍚 About 50g', correct: true, feedback: 'Nice! About 45g in the rice and a few in the veggies and sauce.' },
+        { text: '🍚 About 100g', correct: false, feedback: 'That\'s more like two big plates. One cup of rice is closer to 45g.' }
+      ],
+      continueText: '🍽️ Eat dinner',
+      onDone: () => {
+        eatMeal(50, 'slow'); tick(0.5); advanceTime(0.5);
+        if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification('Estimating Carbs Without Labels', 'green'), 500);
+      },
+      next: 'day1-dinner-social'
+    })
   });
 
   addPassage('day1-dinner-social', {
-    content: () => '<h2>Dinner Conversation</h2><p>Someone asks how your day went.</p>',
+    content: () => sceneArt('👨‍👩‍👧 🍽️', [], 'evening') + '<h2>Dinner Table</h2><p>Someone asks how your day went.</p>',
     choices: [
-      { text: '"Pretty good! Learning a lot."', onSelect: () => { updateConfidence(3); }, next: 'day1-evening' },
-      { text: '"It\'s a lot to think about."', onSelect: () => { updateConfidence(3); }, next: 'day1-evening' },
-      { text: '"Can we talk about something else?"', onSelect: () => { updateConfidence(3); }, next: 'day1-evening' }
+      { text: '"Pretty good! I\'m learning a lot."', onSelect: () => updateConfidence(3), next: 'day1-evening' },
+      { text: '"It was a lot to think about."', onSelect: () => updateConfidence(3), next: 'day1-evening' },
+      { text: '"Can we talk about something else?"', onSelect: () => updateConfidence(3), next: 'day1-evening' }
     ]
   });
 
   addPassage('day1-evening', {
-    content: (s) => '<h2>Evening</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. ' + getBGZone(s.bg.current).label + '.</p>',
+    content: (s) => sceneArt('🌆', ['🛋️ 📺 🎲'], 'evening') + '<h2>Evening</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '.</p>',
     onEnter: () => { advanceTime(1.5); tick(1.0); },
     choices: [
-      { text: 'Relax', next: 'day1-bedtime' },
-      { text: 'Check your journal', onSelect: () => { openJournal(); }, next: 'day1-bedtime' }
+      { text: '🎲 Relax', next: 'd1-bedtime' },
+      { text: '📖 Read your Knowledge Journal', onSelect: () => { openJournal(); }, next: 'd1-bedtime' }
     ]
   });
 
-  addPassage('day1-bedtime', {
-    content: (s) => '<h2>Bedtime Snack</h2><p>' + s.companion.name + ': "Bedtime snack = steady overnight BG."</p>',
-    onEnter: () => { advanceTime(1.5); tick(0.5); },
-    choices: [
-      { text: 'Crackers with cheese (~15g)', onSelect: (s) => { eatFood(15,'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: 'day1-final-check' },
-      { text: 'Glass of milk (~12g)', onSelect: (s) => { eatFood(12,'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: 'day1-final-check' },
-      { text: 'Toast with butter (~15g)', onSelect: (s) => { eatFood(15,'slow'); s.score.snacksRemembered++; s.score.mealsManaged++; }, next: 'day1-final-check' }
-    ]
-  });
-
+  registerBedtime(1, 'day1-final-check');
   addPassage('day1-final-check', {
-    content: (s) => {
-      const ok = s.bg.current >= 5 && s.bg.current <= 12;
-      return '<h2>Final Check</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. ' + (ok ? 'Looking good.' : 'Safe enough.') + '</p>';
-    },
+    content: (s) => '<h2>Last Check</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '</p>',
     onEnter: () => {
       tick(0.5);
       if (collectBetaCell('bedtime-snacks')) setTimeout(() => showBetaCellNotification('Why Bedtime Snacks Matter', 'green'), 500);
     },
-    next: 'day1-end', continueText: 'Go to sleep'
+    next: 'd1-end', continueText: '😴 Go to sleep'
   });
-
-  addPassage('day1-end', {
-    noWrap: true,
-    content: (s) => {
-      // AUDIO: Play end-of-day summary fanfare
-      const samples = s.score.bgSamples;
-      const inRange = samples.filter(x => x.value >= 5 && x.value <= 12).length;
-      const tir = samples.length > 0 ? Math.round((inRange / samples.length) * 100) : 80;
-      return '<div class="summary-panel"><h2>Day 1 — Complete</h2>' +
-        '<div class="summary-stat"><span class="label">Time in Range</span><span class="value" style="color:var(--zone-green)">' + tir + '%</span></div>' +
-        '<div class="tir-bar"><div class="tir-fill" style="width:' + tir + '%"></div></div>' +
-        '<div class="summary-stat"><span class="label">Meals</span><span class="value">' + s.score.mealsManaged + '/4</span></div>' +
-        '<div class="summary-stat"><span class="label">Snacks</span><span class="value">' + s.score.snacksRemembered + '/3</span></div>' +
-        '<div class="summary-stat"><span class="label">Beta Cells</span><span class="value" style="color:var(--accent-warm)">' + s.score.collectiblesFound.length + '/' + s.score.totalCollectibles + '</span></div>' +
-        '<div class="summary-stat"><span class="label">Confidence</span><span class="value">' + s.confidence + '</span></div></div>' +
-        '<div class="passage"><p><strong>' + s.companion.name + ':</strong> "Day 1 done. You handled it."</p></div>';
-    },
-    onEnter: (s) => {
-      const samples = s.score.bgSamples;
-      const inRange = samples.filter(x => x.value >= 5 && x.value <= 12).length;
-      s.score.timeInRange.push(samples.length > 0 ? Math.round((inRange / samples.length) * 100) : 80);
-      saveGame();
-      showCompanion("Day 1 done. You should be proud.", 5000);
-    },
-    choices: [{
-      text: 'Start Day 2',
-      onSelect: () => { state.time.day = 2; startDay(2); }
-    }]
-  });
+  registerDayEnd(1);
 }
 
 // ============================================
 // 19. INIT
 // ============================================
 
+function inGame() {
+  return !!(currentSlot && state.flags.setupComplete && !NON_GAME_PASSAGE.test(state.narrative.currentPassage || ''));
+}
+
+// The browser Back button can't undo a choice here. Instead of leaving the page,
+// it opens an in-page message explaining that the game is saved.
+function guardNavigation() {
+  try {
+    history.replaceState({ sr: 'base' }, '');
+    history.pushState({ sr: 'guard' }, '');
+  } catch (e) { return; }
+  window.addEventListener('popstate', () => {
+    history.pushState({ sr: 'guard' }, '');
+    if (!inGame()) return;
+    saveGame();
+    showModal('⬅️ The Back button',
+      '<p>The Back button doesn\'t take back choices in Sugar Rush.</p>' +
+      '<p>💾 Don\'t worry: your game is saved, right up to this moment.</p>',
+      [
+        { text: '▶ Keep playing', primary: true },
+        { text: '🏠 Go to the title screen', onClick: goToTitle }
+      ]);
+  });
+  // Refresh / close: the save is already up to date. Browsers show their own
+  // "leave site?" box here; the Menu (☰) explains that refreshing is safe.
+  window.addEventListener('beforeunload', (e) => {
+    if (!inGame()) return;
+    saveGame();
+    e.preventDefault();
+    e.returnValue = '';
+  });
+}
+
 function init() {
+  migrateLegacySave();
   registerSetupPassages();
   registerDay1Passages();
   registerLowBGRescuePassages();
   initHUD();
+  guardNavigation();
   renderPassage('dedication');
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
 
-return { state, renderPassage, startDay, openJournal, saveGame, loadGame };
+return { state, renderPassage, startDay, openJournal, saveGame, loadGame, tick, eatMeal, playMiniGame };
 })();
