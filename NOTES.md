@@ -2,6 +2,15 @@
 
 **Last updated:** 2026-11-10 (see HANDOFF.md for full status)
 
+## Session Log (2026-11-10, part 3): fact check + meal slots
+
+- Tim: meals ignoring time of day "not acceptable"; all facts must come from Diabetes Canada or Health Canada, and should have been gathered first as a reference.
+- Read Diabetes Canada guideline chapters 9, 10, 12, 14 (+2023 update), 15, 34 and patient pages (Type 1, insulin, air travel, carb counting, Handy Portion Guide), plus Canada's Food Guide pages and Health Canada's Nutrient Value of Some Common Foods (2008). Reference: `design/fact-sources.md`.
+- Rewrote all 50 Beta Cells (with `src` tags), every food carb value, Label Reader (real values, subtract-fibre), Treat-the-Low (sourced list, no amounts), Mealtime Routine and Sick Day steps, Pip hints.
+- Meals tagged breakfast/lunch/dinner; weekend-only lunches; gentle sick-day meals.
+- Exercise Balance made a bit harder (Tim: "a tad harder").
+- Open source questions are in HANDOFF.md section 8.
+
 ## Session Log (2026-11-10, part 2): v0.2 overhaul
 
 Driven by Tim's v0.2 critique (saved in Claude memory as `feedback_v02.md`). Summary of what changed is in HANDOFF.md section 5. Highlights:

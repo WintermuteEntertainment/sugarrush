@@ -328,12 +328,13 @@ function checkLowBGInterrupt(currentId) {
 function startLowRescue(nextId, mealSoon) { beginRescue(nextId, true, mealSoon); }
 
 const RECOVERY_SNACKS = [
-  { emoji: '🧀🍘', name: 'Cheese and crackers', carbs: 15 },
-  { emoji: '🥪', name: 'Half a sandwich', carbs: 15 },
-  { emoji: '🍎🧀', name: 'Apple slices and a cheese stick', carbs: 15 },
-  { emoji: '🥛🍘', name: 'Glass of milk and a couple of crackers', carbs: 15 },
-  { emoji: '🫓🫘', name: 'Half a pita with hummus', carbs: 15 },
-  { emoji: '🥣🍓', name: 'Plain yogurt with a few berries', carbs: 15 }
+  // Diabetes Canada: if a meal is more than an hour away, a snack with carbohydrate and protein.
+  { emoji: '🍘🧀', name: '4 crackers and cheese', carbs: 12 },
+  { emoji: '🥪', name: 'Half a turkey sandwich', carbs: 16 },
+  { emoji: '🍎🧀', name: 'Apple and cheese', carbs: 20 },
+  { emoji: '🥛🍘', name: 'Milk and 4 crackers', carbs: 23 },
+  { emoji: '🫓🫘', name: 'Half a pita with hummus', carbs: 25 },
+  { emoji: '🥣🍓', name: 'Plain yogurt with strawberries', carbs: 19 }
 ];
 
 function registerLowBGRescuePassages() {
@@ -341,8 +342,8 @@ function registerLowBGRescuePassages() {
     content: (s) => {
       const bg = s.bg.current, severe = isSevereLowBG(bg), repeat = (s.narrative.lowsToday || 1) > 1;
       const symptoms = severe
-        ? pick(['Your hands are shaking hard and it is tough to think straight.', 'Everything feels slow and far away. Your heart is pounding.'])
-        : pick(['Your hands feel trembly.', 'You feel sweaty and suddenly very hungry.', 'You feel dizzy and a bit grumpy.', 'Your legs feel wobbly and your head feels foggy.']);
+        ? pick(['Your hands are shaking hard and it is tough to think straight.', 'You feel very drowsy and confused, and your heart is pounding.'])
+        : pick(['Your hands feel trembly.', 'You feel sweaty and suddenly very hungry.', 'You feel dizzy and it\'s hard to concentrate.', 'Your legs feel weak and you have a headache.']);
       const check = s.player.device.bgMonitor === 'cgm' ? 'Your CGM beeps.' : 'You check with your meter.';
       const cause = s.narrative.lowCause ? '<p class="passage-scene">' + s.narrative.lowCause + '</p>' : '';
       s.narrative.lowCause = null;
@@ -403,11 +404,11 @@ function registerLowBGRescuePassages() {
     content: (s) => {
       if (s.narrative.rescueMealSoon) {
         return '<h2>Back on Track</h2><p>' + (/-snack-/.test(s.narrative.pendingAfterRescue || '')
-          ? 'It\'s snack time anyway. A snack with some carbs and some protein will help you stay steady.'
+          ? 'It\'s snack time anyway. Diabetes Canada suggests a snack with some carbs and some protein after a low.'
           : 'Your next meal is coming up soon. That will help keep you steady.') + '</p>';
       }
       return sceneArt('🍽️', ['🧀 🍘 🍎 🥛']) + '<h2>Keep It Steady</h2>' +
-        '<p>Your next meal is a while away. A small snack with some carbs and some protein helps stop your BG from dipping again.</p>';
+        '<p>Your next meal is more than an hour away. Diabetes Canada says to have a snack with some carbs and some protein.</p>';
     },
     choices: (s) => s.narrative.rescueMealSoon
       ? [{ text: 'Continue', next: 'low-bg-rescue-after' }]
@@ -585,7 +586,7 @@ function pipHint() {
   else if (bg > 10) line = 'A bit high. Water helps, and your plan for highs will bring it down. It takes time.';
   else line = pick([
     'Looking good. Tap the Beta Cell counter (top right) to read what you\'ve learned.',
-    'Carbs plus protein keeps BG steady longest.',
+    'Canada\'s Food Guide says to make water your drink of choice.',
     'The menu button (☰) shows how saving works.',
     'In range! Nice.'
   ]);
@@ -707,63 +708,66 @@ function randomLine(cat) { const pool = companionLines[cat]; return pool ? pool[
 // ============================================
 
 const betaCells = [
-  // BLUE — Facts (13)
-  { id: 'what-is-blood-sugar', name: 'What is Blood Sugar?', cat: 'blue', desc: 'Blood sugar (glucose) is the main sugar in your blood. It comes from the food you eat and is your body\'s primary source of energy. Your body needs to keep blood sugar in a healthy range to function well.' },
-  { id: 'what-are-carbs', name: 'What are Carbs?', cat: 'blue', desc: 'Carbohydrates are nutrients found in food that your body breaks down into glucose. Bread, rice, fruit, and sweets all contain carbs. Counting carbs is how your insulin plan knows what you ate.' },
-  { id: 'what-is-insulin', name: 'What is Insulin?', cat: 'blue', desc: 'Insulin is a hormone that acts like a key, unlocking your cells so glucose can enter and be used for energy. In T1D, your body stops making insulin, so you take it through a pump or injections.' },
-  { id: 'what-is-t1d', name: 'What is Type 1 Diabetes?', cat: 'blue', desc: 'Type 1 Diabetes is an autoimmune condition where the immune system mistakenly destroys the beta cells in the pancreas that make insulin. It\'s not caused by diet or lifestyle — it can happen to anyone.' },
-  { id: 'what-are-ketones', name: 'What are Ketones?', cat: 'blue', desc: 'When your body can\'t use glucose for energy (because there\'s not enough insulin), it burns fat instead. This creates ketones. A small amount is normal, but high ketones can be dangerous and can lead to DKA.' },
-  { id: 'what-is-a1c', name: 'What is A1C?', cat: 'blue', desc: 'A1C is a blood test that shows your average blood sugar over the past 2-3 months. It\'s like a report card for blood sugar management. Your diabetes team uses it to see how things are going overall.' },
-  { id: 'what-is-basal', name: 'What is Basal Insulin?', cat: 'blue', desc: 'Basal insulin is the background insulin your body needs all day and night, even when you\'re not eating. Pumps deliver it continuously. With injections, you take a long-acting shot once or twice daily.' },
-  { id: 'what-is-bolus', name: 'What is a Bolus?', cat: 'blue', desc: 'A bolus is the insulin you take for food, or when your blood sugar is high. Your diabetes team gives you a plan for how much to take, based on the carbs you eat and your BG. Everyone\'s plan is different.' },
-  { id: 'how-cgm-works', name: 'How Does a CGM Work?', cat: 'blue', desc: 'A Continuous Glucose Monitor (CGM) is a small sensor inserted under the skin that measures glucose in the fluid between cells. It checks every few minutes and shows trends — whether you\'re rising, falling, or stable.' },
-  { id: 'how-pump-works', name: 'How Does an Insulin Pump Work?', cat: 'blue', desc: 'An insulin pump is a small device that delivers fast-acting insulin through a tiny tube under the skin. It gives a steady trickle (basal) all day and you program it to give extra (bolus) at meals.' },
-  { id: 'what-is-pancreas', name: 'What is the Pancreas?', cat: 'blue', desc: 'The pancreas is an organ behind your stomach. In people without diabetes, it makes insulin automatically when blood sugar rises. In T1D, the insulin-making cells (beta cells) have been destroyed.' },
-  { id: 'what-are-beta-cells', name: 'What are Beta Cells?', cat: 'blue', desc: 'Beta cells are special cells in the pancreas that produce insulin. In Type 1 Diabetes, the immune system attacks and destroys these cells. That\'s why people with T1D need to take insulin from outside the body.' },
-  { id: 'macronutrients', name: 'Carbs, Protein, and Fat — The Big Three', cat: 'blue', desc: 'Food is made up of three main nutrients: carbs raise blood sugar the fastest, protein raises it slowly and helps you feel full, and fat slows down digestion. Knowing all three helps you predict what your BG will do.' },
+  // Every factual statement here comes from Diabetes Canada or Health Canada.
+  // `src` codes are listed in design/fact-sources.md. 'encouragement' = no factual claim.
 
-  // GREEN — Skills (13)
-  { id: 'carbs-everywhere', name: 'Carbs Are Everywhere (And That\'s Okay)', cat: 'green', desc: 'Carbs aren\'t bad — they\'re fuel! But they\'re in more foods than you might think: bread, rice, fruit, milk, even some vegetables. The key isn\'t avoiding carbs — it\'s knowing how many you\'re eating.' },
-  { id: 'fifteen-fifteen-rule', name: 'The 15-15 Rule: Your Low Plan', cat: 'green', desc: 'Under 4.0 mmol/L is a low. Have fast sugar (glucose tabs are a great choice), wait 15 minutes, then check again. Still under 4? Treat again. Your diabetes team will tell you how much fast sugar is right for you. Chocolate and other fatty foods are too slow for a low.' },
-  { id: 'estimating-carbs', name: 'Estimating Carbs Without Labels', cat: 'green', desc: 'Not all food comes with nutrition labels. Use your hand as a guide: your fist is about 1 cup, your palm is about a serving of protein. Practice makes this easier — you don\'t need to be exact, just close.' },
-  { id: 'bedtime-snacks', name: 'Why Bedtime Snacks Matter', cat: 'green', desc: 'A bedtime snack with carbs AND protein helps keep blood sugar steady overnight. Your body still needs fuel while you sleep. A good combo: crackers with cheese, toast with peanut butter, or a glass of milk.' },
-  { id: 'reading-labels', name: 'Reading a Nutrition Label', cat: 'green', desc: 'On a Canadian Nutrition Facts label, look for: Serving Size (how much is one serving?), Carbohydrate (your key number), and Fibre (part of the carbohydrate number; ask your team how they want you to count it). Always check how many servings are in the package!' },
-  { id: 'restaurant-carbs', name: 'Counting Carbs at a Restaurant', cat: 'green', desc: 'Restaurants are tricky — no labels! Estimate using what you know: a bun is ~30g, a cup of rice ~45g, a side of fries ~40g. Ask the server about ingredients. Some restaurants have nutrition info online — check before you go.' },
-  { id: 'adjusting-exercise', name: 'Adjusting for Exercise', cat: 'green', desc: 'Exercise lowers blood sugar, sometimes for hours afterwards. Check your BG before you start, keep fast sugar close by, and make an exercise plan with your diabetes team. Every body responds differently, and you\'ll learn your pattern.' },
-  { id: 'sick-day-management', name: 'Sick Day Management', cat: 'green', desc: 'When you\'re sick, blood sugar often runs high even if you\'re not eating much. Check BG and ketones more often, sip fluids, and follow the sick day plan from your diabetes team. Call them if ketones stay high or you can\'t keep fluids down.' },
-  { id: 'packing-trip', name: 'Packing for a Trip', cat: 'green', desc: 'Always pack MORE supplies than you think you\'ll need: extra insulin, extra test strips, glucose tabs, snacks, and your medical ID. Keep insulin cool but not frozen. If flying, carry everything in your carry-on — never check it.' },
-  { id: 'site-rotation', name: 'Site Rotation and Care', cat: 'green', desc: 'Whether you use a pump or injections, rotating where you put your sites/inject prevents scar tissue buildup. Common spots: belly, thighs, upper arms, and hips. Give each spot time to rest before using it again.' },
-  { id: 'portion-estimation', name: 'Portion Size Estimation', cat: 'green', desc: 'Your hand is a built-in measuring tool. Fist = 1 cup (rice, pasta). Palm = protein serving. Thumb = 1 tablespoon (peanut butter). Cupped hand = 1/2 cup (fruit). These aren\'t exact, but they\'re close enough for good carb counting.' },
-  { id: 'pre-bolusing', name: 'Timing Your Mealtime Insulin', cat: 'green', desc: 'Some people take mealtime insulin a little before eating, so it\'s already working when the food arrives. Ask your diabetes team whether that\'s right for you, and how early.' },
-  { id: 'correcting-high', name: 'Correcting a High', cat: 'green', desc: 'When BG is above your target, follow your diabetes team\'s plan for highs. Insulin you already took keeps working for a few hours, so taking more too soon can stack up and cause a low. Drinking water helps too.' },
+  // BLUE: Facts (13)
+  { id: 'what-is-blood-sugar', name: 'What is Blood Sugar?', cat: 'blue', src: 'DC-T1, DC-CPG34', desc: 'Blood sugar (also called blood glucose) is sugar in your blood. Insulin helps your body\'s cells use it for energy. Diabetes Canada\'s targets for kids and teens are 4.0 to 8.0 before meals and 5.0 to 10.0 two hours after meals.' },
+  { id: 'what-are-carbs', name: 'What are Carbs?', cat: 'blue', src: 'DC-CARB, DC-CPG34', desc: 'Carbohydrates are in grains and starches, fruits, some vegetables, legumes, milk, sugary foods and many prepared foods. Meat, most vegetables and fats have little. Counting carbs is a way to match your insulin to the carbs you eat.' },
+  { id: 'what-is-insulin', name: 'What is Insulin?', cat: 'blue', src: 'DC-INS, DC-T1, DC-CPG12', desc: 'Insulin is a hormone made by the pancreas. It helps your body\'s cells use blood sugar for energy. With type 1 diabetes, insulin is given by pen, syringe or insulin pump.' },
+  { id: 'what-is-t1d', name: 'What is Type 1 Diabetes?', cat: 'blue', src: 'DC-T1', desc: 'Type 1 diabetes is an autoimmune condition: the body\'s immune cells mistakenly attack the cells in the pancreas that make insulin. It usually starts in childhood, but it can start in adults too.' },
+  { id: 'what-are-ketones', name: 'What are Ketones?', cat: 'blue', src: 'DC-CPG9, DC-CPG15, DC-T1', desc: 'Diabetes Canada recommends checking ketones when you\'re sick with high blood sugar, when your BG before meals stays above 14.0, or if you have signs of DKA. A blood ketone test is preferred over a urine test. DKA happens when there isn\'t enough insulin in your body.' },
+  { id: 'what-is-a1c', name: 'What is A1C?', cat: 'blue', src: 'DC-CPG9, DC-CPG34', desc: 'A1C is a blood test that shows your average blood sugar over the last 2 to 3 months. Diabetes Canada\'s A1C target for kids and teens is 7.5% or lower.' },
+  { id: 'what-is-basal', name: 'What is Basal Insulin?', cat: 'blue', src: 'DC-CPG12, DC-INS', desc: 'Basal insulin is long- or intermediate-acting insulin that works in the background. Insulin pumps deliver insulin 24 hours a day through a small tube under the skin.' },
+  { id: 'what-is-bolus', name: 'What is a Bolus?', cat: 'blue', src: 'DC-CPG12, DC-INS', desc: 'A bolus is rapid- or short-acting insulin for the rise in blood sugar at meals. Your diabetes team gives you the plan for how much to take and when.' },
+  { id: 'how-cgm-works', name: 'How Does a CGM Work?', cat: 'blue', src: 'DC-CPG9', desc: 'A CGM measures glucose in the fluid around your cells (called interstitial fluid). It shows trend arrows, and it can sound an alarm when glucose goes above or below a limit you set.' },
+  { id: 'how-pump-works', name: 'How Does an Insulin Pump Work?', cat: 'blue', src: 'DC-INS', desc: 'An insulin pump is a small device worn outside the body. It replaces injections and delivers insulin 24 hours a day through a small tube under the skin. Some pumps can respond to readings from a CGM.' },
+  { id: 'what-is-pancreas', name: 'What is the Pancreas?', cat: 'blue', src: 'DC-INS, DC-T1', desc: 'The pancreas is the organ that makes insulin. In type 1 diabetes, the immune system attacks the cells in the pancreas that make insulin.' },
+  { id: 'what-are-beta-cells', name: 'Why "Beta Cells"?', cat: 'blue', src: 'DC-T1', desc: 'The cells in the pancreas that make insulin are called beta cells. They are the cells the immune system attacks in type 1 diabetes. In this game, every Beta Cell you collect is a fact you get to keep.' },
+  { id: 'macronutrients', name: 'Canada\'s Food Guide in a Nutshell', cat: 'blue', src: 'CFG-SNAP', desc: 'Canada\'s Food Guide says: eat a variety of healthy foods each day. Have plenty of vegetables and fruits, choose whole grain foods, eat protein foods, and make water your drink of choice.' },
 
-  // GOLD — Life Wisdom (13)
-  { id: 'talking-to-friends', name: 'Talking to Friends About T1D', cat: 'gold', desc: 'Some days you\'ll want to explain everything. Other days you won\'t want to talk about it at all. Both are fine. You don\'t owe anyone an explanation — but having a few people who understand can make things easier.' },
-  { id: 'bad-days-okay', name: 'It\'s Okay to Have Bad Days', cat: 'gold', desc: 'Some days your blood sugar will be all over the place no matter what you do. That doesn\'t mean you failed. Even people who\'ve managed T1D for decades have bad days. Be kind to yourself and try again tomorrow.' },
-  { id: 'not-your-numbers', name: 'You Are Not Your Numbers', cat: 'gold', desc: 'A blood sugar reading is information, not a grade. A high number doesn\'t mean you did something wrong. A low number doesn\'t mean you\'re broken. These are data points that help you make decisions — nothing more.' },
-  { id: 'asking-help', name: 'Asking for Help is a Strength', cat: 'gold', desc: 'Managing T1D is a lot. Asking for help — from parents, friends, teachers, your diabetes team — isn\'t weakness. It\'s smart. Even the most independent people need support sometimes.' },
-  { id: 'setting-boundaries', name: 'Setting Boundaries', cat: 'gold', desc: 'It\'s okay to say "I don\'t want to talk about that right now." It\'s okay to not show your CGM to curious strangers. It\'s okay to eat in private if that\'s what you need. Your health is your business — you decide who\'s in the circle.' },
-  { id: 'teaching-others', name: 'Teaching Others About T1D', cat: 'gold', desc: 'When you explain T1D to someone, you become the expert. That shift — from "patient" to "educator" — is powerful. You don\'t have to correct every misconception, but when you choose to teach, you help everyone.' },
-  { id: 'burnout-real', name: 'Diabetes Burnout is Real', cat: 'gold', desc: 'Getting tired of the constant checking, counting, and dosing is completely normal. It doesn\'t mean you\'re lazy or don\'t care. Take breaks where you can, ask for help, and talk to your diabetes team about how you\'re feeling.' },
-  { id: 'celebrating-wins', name: 'Celebrating Small Wins', cat: 'gold', desc: 'Caught a low before it got bad? That\'s a win. Estimated carbs perfectly at dinner? Win. Made it through a tough day? Huge win. T1D management is full of small victories — notice them.' },
-  { id: 'every-expert-beginner', name: 'Every Expert Was Once a Beginner', cat: 'gold', desc: 'The person who manages their T1D effortlessly was once terrified of their first injection. Every skill you\'re learning now will become second nature. Give yourself time and grace.' },
-  { id: 'feelings-valid', name: 'Your Feelings Are Valid', cat: 'gold', desc: 'Angry about having T1D? Valid. Frustrated when things don\'t work? Valid. Sad about what\'s changed? Valid. Don\'t let anyone — including yourself — tell you that you shouldn\'t feel what you feel.' },
-  { id: 'support-team', name: 'Building Your Support Team', cat: 'gold', desc: 'Your support team is the people who have your back: family, friends, teachers, coaches, your diabetes team. Let them know what you need — some people want to help but don\'t know how unless you tell them.' },
-  { id: 'self-advocacy', name: 'Self-Advocacy is a Superpower', cat: 'gold', desc: 'Speaking up for what you need — a snack during class, a timeout during sports, a moment to check your BG — gets easier with practice. You have the right to manage your health wherever you are.' },
-  { id: 'tld-not-define', name: 'T1D Doesn\'t Define You', cat: 'gold', desc: 'You are a person who happens to have Type 1 Diabetes. It\'s part of your life, but it\'s not your whole life. You can do anything — T1D just means you have to plan a little more.' },
+  // GREEN: Skills (13)
+  { id: 'carbs-everywhere', name: 'How Many Carbs?', cat: 'green', src: 'DC-CARB', desc: 'Diabetes Canada says most people aim for about 45 to 60 g of carbohydrate at meals and 15 to 30 g at snacks. Your dietitian helps you set your own goal.' },
+  { id: 'fifteen-fifteen-rule', name: 'Treat, Wait, Check Again', cat: 'green', src: 'DC-CPG14, DC-CPG34', desc: 'Under 4.0 mmol/L is a low. Have fast sugar, like glucose tablets, wait 15 minutes, and check again. Still low? Treat again. For kids, the amount of fast sugar depends on age, so your diabetes team tells you yours. Always carry fast sugar with you.' },
+  { id: 'estimating-carbs', name: 'Carb Counting Tips', cat: 'green', src: 'DC-CARB', desc: 'Diabetes Canada\'s tips: check the serving size, use measuring cups and spoons when you can, and try to be within about 5 g of your carb goal for each meal or snack.' },
+  { id: 'bedtime-snacks', name: 'Lows at Night', cat: 'green', src: 'DC-CPG14, DC-CPG10', desc: 'Lows can happen while you sleep, and you might not feel them. Exercise late in the day can raise the chance of a low overnight. Whether you need a bedtime snack is part of your plan with your diabetes team.' },
+  { id: 'reading-labels', name: 'Reading a Nutrition Facts Table', cat: 'green', src: 'DC-CARB, CFG-LABELS', desc: 'Check the serving size first: every number is for that amount. Find Carbohydrate. Diabetes Canada says fibre does not raise blood sugar and should be subtracted from the total. Canada\'s Food Guide: 5% DV or less is a little, 15% DV or more is a lot.' },
+  { id: 'restaurant-carbs', name: 'Carbs When Eating Out', cat: 'green', src: 'HC-NV, DC-HANDY', desc: 'Health Canada lists a hamburger bun at about 21 g of carbs and 20 to 25 fast-food fries at about 29 g. When there\'s no label, use foods you know and your Handy Portion Guide.' },
+  { id: 'adjusting-exercise', name: 'Being Active', cat: 'green', src: 'DC-CPG34, DC-CPG10', desc: 'Diabetes Canada encourages kids with diabetes to be active at least 3 times a week for 60 minutes or more. Long exercise can lower blood sugar for up to 48 hours afterwards. Make an exercise plan with your diabetes team.' },
+  { id: 'sick-day-management', name: 'Sick Days', cat: 'green', src: 'DC-CPG15, DC-CPG34', desc: 'When you\'re sick, blood sugar can go up and down in ways that are hard to predict. Check more often than usual (for example every 2 to 4 hours), check ketones, drink plenty of water or sugar-free fluids, and follow the sick-day plan you made with your diabetes team.' },
+  { id: 'packing-trip', name: 'Packing for a Trip', cat: 'green', src: 'DC-AIR', desc: 'When you fly, keep insulin and supplies in your carry-on, never in checked luggage, because temperature changes can damage insulin. Bring extra insulin and supplies, glucagon, fast sugar, snacks, and a letter from your doctor.' },
+  { id: 'site-rotation', name: 'Rotating Sites', cat: 'green', src: 'DC-INS', desc: 'Change where you inject insulin each time. Diabetes Canada says this helps prevent fatty lumps that can make insulin work poorly. On your belly, stay about 2 inches (three finger-widths) away from your belly button.' },
+  { id: 'portion-estimation', name: 'The Handy Portion Guide', cat: 'green', src: 'DC-HANDY', desc: 'Diabetes Canada\'s Handy Portion Guide: grains, starches and fruit, the size of your fist. Vegetables, as much as both hands can hold. Meat and alternatives, the size of your palm and as thick as your little finger. Fat, the size of the tip of your thumb.' },
+  { id: 'pre-bolusing', name: 'Timing Mealtime Insulin', cat: 'green', src: 'DC-INS', desc: 'Rapid-acting mealtime insulin is usually taken 0 to 15 minutes before a meal. Your diabetes team tells you what timing is right for you.' },
+  { id: 'correcting-high', name: 'When You\'re High', cat: 'green', src: 'DC-CPG9', desc: 'Your diabetes team\'s plan tells you what to do about highs. Diabetes Canada recommends checking ketones when you\'re sick with high blood sugar, or when your BG before meals stays above 14.0 mmol/L.' },
 
-  // RED — Emergency (11)
-  { id: 'when-call-help', name: 'When to Call for Help', cat: 'red', desc: 'Call your diabetes team or go to the ER if: ketones are high and not coming down, you\'re vomiting and can\'t keep fluids down, BG stays very high even after following your plan, or you feel seriously unwell. Don\'t wait it out — call.' },
-  { id: 'dka-signs', name: 'DKA — Know the Signs', cat: 'red', desc: 'Diabetic Ketoacidosis (DKA) is a serious emergency. Signs: very high BG, moderate to high ketones, nausea/vomiting, stomach pain, fruity-smelling breath, rapid breathing, confusion. This needs immediate medical attention.' },
-  { id: 'severe-low-others', name: 'Severe Low — What Others Need to Know', cat: 'red', desc: 'If you can\'t treat a low yourself, others need to know: don\'t give food or drink to someone who\'s unconscious, use glucagon if available, call 911, lay the person on their side. Make sure at least one person around you knows this.' },
-  { id: 'glucagon-backup', name: 'Glucagon — The Emergency Backup', cat: 'red', desc: 'Glucagon is an emergency medication that raises blood sugar fast. It\'s used when someone is too low to eat or drink. Keep it accessible and make sure people close to you know where it is and how to use it.' },
-  { id: 'sick-day-red-flags', name: 'Sick Day Red Flags', cat: 'red', desc: 'When sick, watch for: ketones rising above moderate, BG staying very high even after following your sick day plan, inability to keep fluids down, fever that won\'t break. These need a call to your doctor — don\'t try to manage alone.' },
-  { id: 'device-failures', name: 'When Your Devices Fail', cat: 'red', desc: 'Pumps can malfunction, CGMs can fall off, meters can die. Always have a backup plan: carry a spare meter and strips, know how to give injections even if you use a pump, and keep emergency supplies separate from your main kit.' },
-  { id: 'overnight-safety', name: 'Overnight Safety', cat: 'red', desc: 'Nighttime lows are a real concern. A bedtime snack, a CGM with alarms, or a planned middle-of-night check can help. Make sure someone in the house knows how to recognize and treat a low while you\'re asleep.' },
-  { id: 'exercise-emergencies', name: 'Exercise Emergencies', cat: 'red', desc: 'During intense activity, BG can drop fast. Always have fast-acting sugar within reach. If you feel shaky, dizzy, or confused during exercise, STOP and treat immediately. Health always comes before the game.' },
-  { id: 'stress-bg', name: 'Stress and Blood Sugar', cat: 'red', desc: 'Stress hormones (like adrenaline and cortisol) raise blood sugar. Tests, arguments, scary movies — all can spike your BG. This isn\'t something you did wrong. Notice the pattern and follow your plan for highs.' },
-  { id: 'travel-safety', name: 'Travel Safety', cat: 'red', desc: 'When traveling: bring double the supplies you think you need, keep insulin in your carry-on (not checked luggage), carry a doctor\'s letter for security, and know the words for "diabetes" and "insulin" in the local language.' },
-  { id: 'medical-id', name: 'Medical ID — Why It Matters', cat: 'red', desc: 'A medical ID bracelet or necklace tells first responders you have T1D if you can\'t speak for yourself. Wear it always — especially during sports, travel, and outings. It\'s a small thing that can save your life.' }
+  // GOLD: Life Wisdom (13). Encouragement, not medical facts.
+  { id: 'talking-to-friends', name: 'Talking to Friends About T1D', cat: 'gold', src: 'encouragement', desc: 'Some days you\'ll want to explain everything. Other days you won\'t want to talk about it at all. Both are fine. Having a few people who understand can make things easier.' },
+  { id: 'bad-days-okay', name: 'It\'s Okay to Have Bad Days', cat: 'gold', src: 'encouragement', desc: 'Some days your blood sugar goes all over the place, even when you followed your plan. That doesn\'t mean you failed. Try again tomorrow.' },
+  { id: 'not-your-numbers', name: 'You Are Not Your Numbers', cat: 'gold', src: 'encouragement', desc: 'A blood sugar reading is information, not a grade. It helps you and your team make decisions. That\'s all it is.' },
+  { id: 'asking-help', name: 'Asking for Help is a Strength', cat: 'gold', src: 'encouragement', desc: 'Managing T1D is a lot. Asking parents, friends, teachers or your diabetes team for help is a smart move.' },
+  { id: 'setting-boundaries', name: 'Setting Boundaries', cat: 'gold', src: 'encouragement', desc: 'It\'s okay to say "I don\'t want to talk about that right now." You decide who you share your diabetes stuff with.' },
+  { id: 'teaching-others', name: 'Teaching Others About T1D', cat: 'gold', src: 'encouragement', desc: 'When you explain T1D to someone, you become the expert. You don\'t have to correct everyone, but when you choose to teach, it helps.' },
+  { id: 'burnout-real', name: 'Feeling Worn Out', cat: 'gold', src: 'DC-CPG34', desc: 'Diabetes Canada says kids and teens with diabetes can go through diabetes distress, and that support helps. If it all feels like too much, tell your family and your diabetes team.' },
+  { id: 'celebrating-wins', name: 'Celebrating Small Wins', cat: 'gold', src: 'encouragement', desc: 'Caught a low early? Win. Counted carbs at a party? Win. Got through a tough day? Big win. Notice them.' },
+  { id: 'every-expert-beginner', name: 'Every Expert Was Once a Beginner', cat: 'gold', src: 'encouragement', desc: 'Everything you\'re learning now gets easier with practice. Give yourself time.' },
+  { id: 'feelings-valid', name: 'Your Feelings Are Valid', cat: 'gold', src: 'encouragement', desc: 'Whatever you feel about having T1D is okay to feel. Talking to someone you trust can help.' },
+  { id: 'support-team', name: 'Building Your Support Team', cat: 'gold', src: 'DC-INS', desc: 'Family, friends, teachers, coaches and your diabetes team can all have your back. Diabetes Canada says it\'s important that others know you have diabetes, in case of an emergency.' },
+  { id: 'self-advocacy', name: 'Speaking Up', cat: 'gold', src: 'encouragement', desc: 'Asking for what you need, like a snack in class or a break during sports to check your BG, gets easier with practice.' },
+  { id: 'tld-not-define', name: 'T1D Doesn\'t Define You', cat: 'gold', src: 'encouragement', desc: 'You are a person who happens to have type 1 diabetes. It\'s part of your life, not all of it.' },
+
+  // RED: Emergency (11)
+  { id: 'when-call-help', name: 'When to Get Help', cat: 'red', src: 'DC-T1', desc: 'If you think you might have DKA, Diabetes Canada says to get medical help immediately. Warning signs include feeling very thirsty, very weak, peeing more than usual, shortness of breath, nausea, throwing up, stomach pain, and high blood sugar.' },
+  { id: 'dka-signs', name: 'DKA: What It Is', cat: 'red', src: 'DC-T1, DC-CPG34, DC-CPG15', desc: 'DKA is a serious complication that happens when there isn\'t enough insulin in your body. In kids with diabetes, it comes from missed insulin or a sick day that didn\'t go to plan. Blood ketone tests are preferred over urine tests.' },
+  { id: 'severe-low-others', name: 'Severe Lows: What Others Should Know', cat: 'red', src: 'DC-CPG14, DC-CPG12', desc: 'If someone with diabetes is unconscious from a low, they need glucagon, and emergency services should be called. The people around you should learn about lows: how to spot them and what to do.' },
+  { id: 'glucagon-backup', name: 'Glucagon: The Emergency Backup', cat: 'red', src: 'DC-CPG14, DC-CPG34, DC-AIR', desc: 'Glucagon is an emergency medicine for severe lows, when someone can\'t safely eat or drink. Diabetes Canada suggests bringing a glucagon emergency kit when travelling or hiking somewhere remote.' },
+  { id: 'sick-day-red-flags', name: 'Sick Day Warning Signs', cat: 'red', src: 'DC-T1, DC-CPG15', desc: 'Get help if you have DKA warning signs: very thirsty, very weak, peeing a lot, short of breath, throwing up or stomach pain. Diabetes Canada says sick-day plans that include ketone checks help young people stay out of the hospital.' },
+  { id: 'device-failures', name: 'Have a Backup', cat: 'red', src: 'DC-AIR', desc: 'Diabetes Canada\'s travel checklist includes extra insulin, extra syringes and needles, and an extra insulin pen if you use one. Backups help if something breaks or runs out.' },
+  { id: 'overnight-safety', name: 'Overnight Safety', cat: 'red', src: 'DC-CPG14, DC-CPG9', desc: 'Lows during sleep are common and may not wake you up. A CGM can sound an alarm when glucose goes below a limit you set.' },
+  { id: 'exercise-emergencies', name: 'Fast Sugar, Always', cat: 'red', src: 'DC-CPG14', desc: 'Diabetes Canada says to carry fast sugar at all times, like glucose tablets or a juice box. If you feel shaky, sweaty, dizzy or confused while you\'re active, stop and check.' },
+  { id: 'stress-bg', name: 'Sprinting Can Surprise You', cat: 'red', src: 'DC-CPG10', desc: 'Most exercise lowers blood sugar, but Diabetes Canada notes that brief, intense exercise like sprinting can make glucose go up for a while.' },
+  { id: 'travel-safety', name: 'Airport Security', cat: 'red', src: 'DC-AIR', desc: 'You can bring liquids to treat lows through airport security, even over 100 mL, if you declare them. You don\'t have to remove your insulin pump for screening, but it shouldn\'t go through the body scanner or x-ray.' },
+  { id: 'medical-id', name: 'Medical ID', cat: 'red', src: 'DC-INS', desc: 'Diabetes Canada says to always carry a card that says you have diabetes, and suggests a bracelet such as MedicAlert, so people know in an emergency.' }
 ];
 
 const betaCellMap = {};
@@ -1025,30 +1029,29 @@ function registerMealEvent(id, title, tier, options, betaId) {
 // Tier 1 meals
 registerMealEvent('pancake', 'Pancake Morning', 1, {
   scene: 'Kitchen. The sweet smell of pancakes fills the air.',
-  companionIntro: "Pancakes! Syrup is basically pure sugar — keep that in mind.",
+  companionIntro: "Pancakes! Maple syrup has 14 g of carbs in one tablespoon.",
   foods: [
-    { name: 'Pancakes with syrup', carbs: 55, desc: 'Three fluffy pancakes drizzled with maple syrup.', speed: 'fast' },
-    { name: 'Pancakes with fruit', carbs: 45, desc: 'Two pancakes topped with strawberries.', speed: 'fast' },
-    { name: 'One pancake + eggs', carbs: 25, desc: 'One pancake with scrambled eggs on the side.', speed: 'slow' }
+    { name: '3 pancakes + 2 tbsp maple syrup', carbs: 61, desc: '3 pancakes (33 g) + syrup (28 g).', speed: 'fast' },
+    { name: '2 pancakes + strawberries', carbs: 28, desc: '2 pancakes (22 g) + 7 strawberries (6 g).', speed: 'fast' },
+    { name: '1 pancake + 2 eggs', carbs: 13, desc: '1 pancake (11 g) + 2 eggs (2 g).', speed: 'slow' }
   ],
-  result: "Breakfast of champions. The syrup hits fast, so the insulin timing matters here."
 });
 
 registerMealEvent('sandwich', 'Sandwich Builder', 1, {
   scene: 'Lunch time. You\'re building your own sandwich.',
   foods: [
-    { name: 'Turkey on white bread', carbs: 35, desc: 'Turkey, lettuce, tomato on two slices of white bread.', speed: 'fast' },
-    { name: 'PB&J on whole wheat', carbs: 45, desc: 'Peanut butter and jam on whole wheat. Classic.', speed: 'slow' },
-    { name: 'Chicken wrap', carbs: 25, desc: 'Grilled chicken in a small tortilla with veggies.', speed: 'slow' }
+    { name: 'Turkey sandwich on white bread', carbs: 36, desc: '2 slices white bread (36 g). Turkey has little carbohydrate.', speed: 'fast' },
+    { name: 'Cheese sandwich on whole wheat', carbs: 33, desc: '2 slices whole wheat (32 g) + cheese (1 g).', speed: 'slow' },
+    { name: 'Chicken wrap', carbs: 27, desc: 'One 20 cm wheat tortilla (27 g) with chicken and veggies.', speed: 'slow' }
   ]
 }, 'macronutrients');
 
 registerMealEvent('taco', 'Taco Night', 1, {
   scene: 'Family taco night. Everything is laid out to build your own.',
   foods: [
-    { name: 'Two hard shell tacos', carbs: 30, desc: 'Beef, cheese, lettuce in crispy shells.', speed: 'slow' },
-    { name: 'Taco bowl (no shell)', carbs: 15, desc: 'All the fillings in a bowl. Fewer carbs, same taste.', speed: 'slow' },
-    { name: 'Three soft tacos', carbs: 45, desc: 'Flour tortillas loaded with everything.', speed: 'slow' }
+    { name: '3 soft corn tacos', carbs: 24, desc: '3 corn tortillas (8 g each), with fillings.', speed: 'slow' },
+    { name: 'Taco bowl with rice and black beans', carbs: 53, desc: '½ cup rice (24 g) + ¾ cup black beans (29 g).', speed: 'slow' },
+    { name: '2 flour tortilla tacos', carbs: 54, desc: '2 wheat tortillas (27 g each).', speed: 'slow' }
   ]
 });
 
@@ -1056,9 +1059,9 @@ registerMealEvent('soup', 'Soup and Bread', 1, {
   scene: 'A warm bowl of soup and crusty bread.',
   companionIntro: "Soup can have hidden carbs — noodles, potatoes, beans.",
   foods: [
-    { name: 'Chicken noodle + bread', carbs: 40, desc: 'Classic chicken noodle with a slice of bread.', speed: 'slow' },
-    { name: 'Tomato soup + crackers', carbs: 35, desc: 'Creamy tomato soup with saltine crackers.', speed: 'fast' },
-    { name: 'Broth-based veggie soup', carbs: 15, desc: 'Clear broth with vegetables. Light on carbs.', speed: 'slow' }
+    { name: 'Chicken noodle soup + bread', carbs: 36, desc: '1 cup soup (18 g) + 1 slice white bread (18 g).', speed: 'slow' },
+    { name: 'Tomato soup + 4 crackers', carbs: 27, desc: '1 cup tomato soup (18 g) + 4 saltines (9 g).', speed: 'slow' },
+    { name: 'Chicken noodle soup only', carbs: 18, desc: '1 cup (18 g).', speed: 'slow' }
   ]
 });
 
@@ -1066,9 +1069,9 @@ registerMealEvent('fruit-salad', 'Fruit Salad Surprise', 1, {
   scene: 'Someone brought a big fruit salad. "It\'s healthy!"',
   companionIntro: "Fruit is healthy AND it has carbs. Both things are true.",
   foods: [
-    { name: 'Big bowl of fruit salad', carbs: 40, desc: 'Melon, grapes, banana, mango. Delicious but carb-heavy.', speed: 'fast' },
-    { name: 'Small bowl with yogurt', carbs: 25, desc: 'A smaller portion with plain yogurt mixed in.', speed: 'slow' },
-    { name: 'Just berries', carbs: 12, desc: 'Strawberries and blueberries. Lower sugar fruits.', speed: 'fast' }
+    { name: 'Big bowl of fruit', carbs: 56, desc: 'A banana (27 g), 20 grapes (18 g), ½ cup blueberries (11 g).', speed: 'fast' },
+    { name: 'Blueberries + plain yogurt', carbs: 24, desc: '½ cup blueberries (11 g) + ¾ cup plain yogurt (13 g).', speed: 'slow' },
+    { name: 'Strawberries + cheese', carbs: 7, desc: '7 strawberries (6 g) + cheese (1 g).', speed: 'slow' }
   ]
 });
 
@@ -1077,20 +1080,20 @@ registerMealEvent('birthday-pizza', 'Birthday Party Pizza', 2, {
   scene: 'A friend\'s birthday party. Pizza, cake, juice boxes. Everyone\'s eating.',
   companionIntro: "Social eating is hard. All approaches are valid here.",
   foods: [
-    { name: 'Two slices of pizza', carbs: 60, desc: 'The full party experience.', speed: 'slow' },
-    { name: 'One slice + salad', carbs: 35, desc: 'Pizza plus something lighter.', speed: 'slow' },
-    { name: 'One slice + birthday cake', carbs: 70, desc: 'Can\'t miss the cake! Big carb load.', speed: 'slow' }
+    { name: 'Two slices of pizza', carbs: 50, desc: '2 slices of cheese pizza (25 g each).', speed: 'slow' },
+    { name: 'One slice + salad', carbs: 25, desc: '1 slice (25 g). Salad has little carbohydrate.', speed: 'slow' },
+    { name: 'One slice + ice cream', carbs: 43, desc: '1 slice (25 g) + ½ cup ice cream (18 g).', speed: 'slow' }
   ],
-  result: "Party food is tricky — but doable. The fat in pizza slows down the carb spike, so the BG might rise later than expected."
+  result: "Party food is tricky, but you counted it."
 }, 'restaurant-carbs');
 
 registerMealEvent('cafeteria-wildcard', 'Cafeteria Wildcard', 2, {
   scene: 'The cafeteria changed the menu. Your planned meal isn\'t available.',
   companionIntro: "Plans change. Time to adapt.",
   foods: [
-    { name: 'Mac and cheese', carbs: 40, desc: 'The backup option. Cheesy and carb-heavy.', speed: 'slow' },
-    { name: 'Chef\'s salad with roll', carbs: 25, desc: 'Salad with ham, cheese, egg, and a bread roll.', speed: 'slow' },
-    { name: 'Fish sticks and fries', carbs: 45, desc: 'Breaded fish with a side of fries.', speed: 'slow' }
+    { name: 'Spaghetti with sauce', carbs: 42, desc: '1 cup cooked spaghetti (42 g).', speed: 'slow' },
+    { name: 'Chef salad + a bun', carbs: 21, desc: 'Salad with ham, cheese and egg, plus a bun (21 g).', speed: 'slow' },
+    { name: 'Fish + fries', carbs: 29, desc: 'Baked fish + 20 to 25 fries (29 g).', speed: 'slow' }
   ]
 });
 
@@ -1098,20 +1101,20 @@ registerMealEvent('grandma', 'Grandma\'s Cooking', 2, {
   scene: 'Grandma made a big meal. She\'s watching to make sure you eat enough. "Have more, you\'re too skinny!"',
   companionIntro: "Navigating family and food. You've got this.",
   foods: [
-    { name: 'Full plate (her portion)', carbs: 65, desc: 'A heaping plate. Grandma is satisfied.', speed: 'slow' },
-    { name: 'Your own portion', carbs: 40, desc: 'A reasonable amount. Grandma looks slightly hurt.', speed: 'slow' },
-    { name: 'Full plate, slow eating', carbs: 55, desc: 'Take a full plate but eat slowly, maybe leave a bit.', speed: 'slow' }
+    { name: 'Her portion', carbs: 69, desc: '1½ cups mashed potatoes (57 g) + ½ cup peas (12 g) + roast.', speed: 'slow' },
+    { name: 'Your own portion', carbs: 31, desc: '½ cup mashed potatoes (19 g) + ½ cup peas (12 g) + roast.', speed: 'slow' },
+    { name: 'In between', carbs: 50, desc: '1 cup mashed potatoes (38 g) + ½ cup peas (12 g) + roast.', speed: 'slow' }
   ],
   result: "Family meals are about more than food. You managed both the carbs and the feelings."
 });
 
 registerMealEvent('protein-plate', 'The Protein Plate', 2, {
-  scene: 'Tonight\'s dinner is steak, roasted veggies, and a green salad.',
+  scene: 'Tonight\'s dinner is steak with carrots and broccoli.',
   companionIntro: "Not every meal is carb-heavy. This one's mostly protein.",
   foods: [
-    { name: 'Steak + veggies only', carbs: 10, desc: 'Almost all protein and fat. Very low carbs.', speed: 'slow' },
-    { name: 'Steak + veggies + bread', carbs: 25, desc: 'Adding a dinner roll for some carbs.', speed: 'slow' },
-    { name: 'Steak + baked potato', carbs: 45, desc: 'Adding a medium baked potato.', speed: 'slow' }
+    { name: 'Steak + carrots + broccoli', carbs: 12, desc: '½ cup carrots (6 g) + ½ cup broccoli (6 g).', speed: 'slow' },
+    { name: 'Steak + veggies + a bun', carbs: 33, desc: 'Veggies (12 g) + a bun (21 g).', speed: 'slow' },
+    { name: 'Steak + veggies + baked potato', carbs: 49, desc: 'Veggies (12 g) + a baked potato (37 g).', speed: 'slow' }
   ]
 }, 'pre-bolusing');
 
@@ -1119,9 +1122,9 @@ registerMealEvent('smoothie-trap', 'The Smoothie Trap', 2, {
   scene: 'Your friend made smoothies. "They\'re so healthy!" The smoothie is HUGE.',
   companionIntro: "Smoothies can be carb bombs. That fruit adds up fast.",
   foods: [
-    { name: 'Full smoothie', carbs: 55, desc: 'Banana, mango, juice, honey. Tastes amazing. Carb bomb.', speed: 'fast' },
-    { name: 'Half smoothie + water', carbs: 28, desc: 'Half the smoothie and switch to water.', speed: 'fast' },
-    { name: 'Make your own (berries + milk)', carbs: 20, desc: 'Just berries and milk. Much lower carbs.', speed: 'fast' }
+    { name: 'Full smoothie', carbs: 72, desc: 'Banana (27 g) + ½ cup apple juice (15 g) + ¾ cup fruit yogurt (30 g).', speed: 'fast' },
+    { name: 'Half the smoothie', carbs: 36, desc: 'Half of the big one.', speed: 'fast' },
+    { name: 'Blueberry milk smoothie', carbs: 23, desc: '½ cup blueberries (11 g) + 1 cup milk (12 g).', speed: 'fast' }
   ]
 });
 
@@ -1130,9 +1133,9 @@ registerMealEvent('restaurant-no-info', 'Restaurant — No Nutrition Info', 3, {
   scene: 'Family dinner at a local restaurant. No nutrition info anywhere. Time to estimate.',
   companionIntro: "No labels. Pure estimation. Use what you've learned.",
   foods: [
-    { name: 'Pasta dish', carbs: 55, desc: 'Looks like about 1.5 cups of pasta with sauce.', speed: 'slow' },
-    { name: 'Grilled chicken + rice', carbs: 45, desc: 'Chicken with what looks like a cup of rice.', speed: 'slow' },
-    { name: 'Burger with fries', carbs: 60, desc: 'Standard burger on a bun with a side of fries.', speed: 'slow' }
+    { name: 'Spaghetti, about 1½ cups', carbs: 63, desc: '1½ cups cooked spaghetti (63 g).', speed: 'slow' },
+    { name: 'Chicken + 1 cup rice', carbs: 48, desc: '1 cup cooked rice (48 g).', speed: 'slow' },
+    { name: 'Burger + fries', carbs: 50, desc: 'Bun (21 g) + 20 to 25 fries (29 g).', speed: 'slow' }
   ],
   result: "Restaurant estimation is a real-world skill. Close enough is good enough."
 }, 'portion-estimation');
@@ -1140,9 +1143,9 @@ registerMealEvent('restaurant-no-info', 'Restaurant — No Nutrition Info', 3, {
 registerMealEvent('cultural-feast', 'Cultural Feast', 3, {
   scene: 'A celebration meal with dishes you might not have tried before.',
   foods: [
-    { name: 'Butter chicken + naan', carbs: 55, desc: 'Rich curry with a piece of naan bread.', speed: 'slow' },
-    { name: 'Biryani', carbs: 50, desc: 'Fragrant rice dish with spices and meat.', speed: 'slow' },
-    { name: 'Perogies + salad', carbs: 45, desc: 'Five potato and cheese perogies with sour cream.', speed: 'slow' }
+    { name: 'Butter chicken + naan', carbs: 36, desc: 'Half a naan (36 g). The chicken has little carbohydrate.', speed: 'slow' },
+    { name: 'Biryani (about 1 cup rice)', carbs: 48, desc: '1 cup cooked rice (48 g).', speed: 'slow' },
+    { name: 'Chana + rice', carbs: 64, desc: '¾ cup chickpeas (40 g) + ½ cup rice (24 g).', speed: 'slow' }
   ],
   result: "Every cuisine is manageable. It's all about breaking down the carbs on the plate."
 });
@@ -1151,9 +1154,9 @@ registerMealEvent('cook-own', 'Cook Your Own Meal', 3, {
   scene: 'You\'re making dinner tonight. You get to choose every ingredient.',
   companionIntro: "Cooking gives you the most control. You know exactly what's in it.",
   foods: [
-    { name: 'Stir-fry + rice', carbs: 50, desc: 'Chicken, veggies, and a cup of rice. You measured everything.', speed: 'slow' },
-    { name: 'Omelette + toast', carbs: 20, desc: 'Eggs with cheese and veggies, two slices of toast.', speed: 'slow' },
-    { name: 'Pasta with homemade sauce', carbs: 55, desc: 'You made the sauce from scratch. Pasta is the carb source.', speed: 'slow' }
+    { name: 'Stir-fry + 1 cup rice', carbs: 48, desc: '1 cup rice (48 g). You measured it.', speed: 'slow' },
+    { name: 'Omelette + 2 slices toast', carbs: 35, desc: '3 eggs (3 g) + 2 slices whole wheat toast (32 g).', speed: 'slow' },
+    { name: 'Spaghetti with your own sauce', carbs: 42, desc: '1 cup cooked spaghetti (42 g).', speed: 'slow' }
   ]
 });
 
@@ -1161,9 +1164,9 @@ registerMealEvent('buffet', 'The Buffet', 3, {
   scene: 'All-you-can-eat buffet. The options are overwhelming.',
   companionIntro: "Buffets are tricky. Portion control matters more than ever.",
   foods: [
-    { name: 'Moderate plate', carbs: 45, desc: 'A reasonable selection. You resisted going back for seconds.', speed: 'slow' },
-    { name: 'Heavy plate', carbs: 70, desc: 'You loaded up. It happens.', speed: 'slow' },
-    { name: 'Protein-focused plate', carbs: 25, desc: 'Mostly meat and veggies, small portion of rice.', speed: 'slow' }
+    { name: 'Moderate plate', carbs: 54, desc: '1 cup rice (48 g) + veggies (6 g) + chicken.', speed: 'slow' },
+    { name: 'Big plate', carbs: 111, desc: '1 cup rice (48 g) + 1 cup noodles (42 g) + a bun (21 g).', speed: 'slow' },
+    { name: 'Protein plate', carbs: 30, desc: '½ cup rice (24 g) + veggies (6 g) + chicken.', speed: 'slow' }
   ]
 });
 
@@ -1171,9 +1174,9 @@ registerMealEvent('not-hungry', 'Eating When You Don\'t Want To', 3, {
   scene: 'You\'re not hungry at all. But your BG is 5.2 and trending down. You need to eat.',
   companionIntro: "Sometimes eating is medicine. Not appetite.",
   foods: [
-    { name: 'Crackers and cheese', carbs: 15, desc: 'Small, easy, quick. Gets the job done.', speed: 'slow' },
-    { name: 'Glass of milk', carbs: 12, desc: 'Liquid is easier when you don\'t feel like eating.', speed: 'fast' },
-    { name: 'Banana', carbs: 27, desc: 'Quick, portable, effective.', speed: 'fast' }
+    { name: 'Crackers and cheese', carbs: 12, desc: '4 whole wheat crackers (11 g) + cheese (1 g).', speed: 'slow' },
+    { name: 'Glass of milk', carbs: 12, desc: '1 cup milk (12 g).', speed: 'slow' },
+    { name: 'Banana', carbs: 27, desc: '1 banana (27 g).', speed: 'fast' }
   ]
 });
 
@@ -1182,39 +1185,39 @@ registerMealEvent('yogurt-bowl', 'Yogurt Bowl', 1, {
   scene: 'A yogurt bowl with toppings set out on the counter.',
   companionIntro: "Plain yogurt has some carbs from milk sugar, and the toppings add more.",
   foods: [
-    { name: 'Plain yogurt + granola + berries', carbs: 30, desc: 'Protein-heavy base plus crunchy granola.', speed: 'slow' },
-    { name: 'Plain yogurt + just berries', carbs: 18, desc: 'Lower carb, still tasty.', speed: 'slow' },
-    { name: 'Flavored yogurt (peach)', carbs: 28, desc: 'Flavored yogurts have added sugar. Read the label.', speed: 'fast' }
+    { name: 'Yogurt + granola + blueberries', carbs: 47, desc: '¾ cup plain yogurt (13 g) + ¼ cup granola (23 g) + ½ cup blueberries (11 g).', speed: 'slow' },
+    { name: 'Yogurt + blueberries', carbs: 24, desc: '¾ cup plain yogurt (13 g) + ½ cup blueberries (11 g).', speed: 'slow' },
+    { name: 'Fruit yogurt', carbs: 30, desc: '¾ cup vanilla or fruit yogurt (30 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('hotdog', 'Hot Dog Lunch', 1, {
   scene: 'Classic hot dog lunch at a cookout.',
   foods: [
-    { name: 'Hot dog + bun + chips', carbs: 45, desc: 'Bun and chips are where the carbs live.', speed: 'fast' },
-    { name: 'Hot dog + bun only', carbs: 27, desc: 'Skip the chips, keep it simple.', speed: 'fast' },
-    { name: 'Hot dog on a lettuce wrap', carbs: 5,  desc: 'Low-carb option when the bun isn\'t essential.', speed: 'slow' }
+    { name: 'Hot dog + pretzels', carbs: 29, desc: 'Bun (21 g) + 20 pretzel sticks (8 g).', speed: 'slow' },
+    { name: 'Hot dog in a bun', carbs: 21, desc: 'Bun (21 g).', speed: 'slow' },
+    { name: 'Hot dog, no bun, + carrots', carbs: 6, desc: '½ cup carrots (6 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('chicken-rice', 'Chicken and Rice', 1, {
   scene: 'A home-cooked plate of chicken with rice and vegetables.',
-  companionIntro: "Rice is dense \u2014 1/2 cup of cooked rice is about 22g.",
+  companionIntro: "Half a cup of cooked rice has about 24 g of carbs.",
   foods: [
-    { name: '1 cup rice + chicken + veggies', carbs: 45, desc: 'A full cup of rice is pretty carb-heavy.', speed: 'slow' },
-    { name: '1/2 cup rice + extra chicken', carbs: 22, desc: 'More protein, less starch.', speed: 'slow' },
-    { name: 'Just chicken + veggies', carbs: 8,  desc: 'Skip the rice entirely.', speed: 'slow' }
+    { name: '1 cup rice + chicken + broccoli', carbs: 54, desc: 'Rice (48 g) + broccoli (6 g).', speed: 'slow' },
+    { name: '½ cup rice + chicken + broccoli', carbs: 30, desc: 'Rice (24 g) + broccoli (6 g).', speed: 'slow' },
+    { name: 'Chicken + broccoli + carrots', carbs: 12, desc: 'Broccoli (6 g) + carrots (6 g).', speed: 'slow' }
   ]
 });
 
 // More Tier 2 meals
 registerMealEvent('movie-snacks', 'Movie Theater', 2, {
   scene: 'The previews are starting. Someone hands you a shared bag of popcorn.',
-  companionIntro: "Popcorn is sneaky \u2014 it looks like air but it\u2019s a lot of carbs.",
+  companionIntro: "Air-popped popcorn has about 7 g of carbs per cup. It adds up.",
   foods: [
-    { name: 'Large popcorn + pop', carbs: 85, desc: 'Butter popcorn and a sugary drink. Lots of carbs.', speed: 'fast' },
-    { name: 'Medium popcorn + water', carbs: 45, desc: 'Water instead of pop, and less popcorn.', speed: 'fast' },
-    { name: 'Share popcorn + water', carbs: 25, desc: 'A small portion to share.', speed: 'fast' }
+    { name: 'Big popcorn + cola', carbs: 84, desc: '8 cups popcorn (56 g) + 1 cup cola (28 g).', speed: 'fast' },
+    { name: 'Medium popcorn + water', carbs: 28, desc: '4 cups popcorn (28 g).', speed: 'fast' },
+    { name: 'Small popcorn + water', carbs: 14, desc: '2 cups popcorn (14 g).', speed: 'fast' }
   ]
 });
 
@@ -1222,30 +1225,30 @@ registerMealEvent('pasta-night', 'Pasta Night', 2, {
   scene: 'Spaghetti with meat sauce. Easy dinner. Hard carbs to count.',
   companionIntro: "Pasta is one of the trickiest things \u2014 portion size deceives everyone.",
   foods: [
-    { name: 'Big plate (~2 cups pasta)', carbs: 80, desc: 'Piled high. That\u2019s a lot of noodles.', speed: 'slow' },
-    { name: 'Normal plate (~1 cup pasta)', carbs: 40, desc: 'Average portion. Easy to underestimate.', speed: 'slow' },
-    { name: 'Half pasta + extra salad', carbs: 22, desc: 'Less pasta, bigger salad on the side.', speed: 'slow' }
+    { name: 'Big plate (2 cups)', carbs: 84, desc: '2 cups cooked spaghetti (84 g).', speed: 'slow' },
+    { name: 'Normal plate (1 cup)', carbs: 42, desc: '1 cup cooked spaghetti (42 g).', speed: 'slow' },
+    { name: '½ cup pasta + salad', carbs: 21, desc: '½ cup spaghetti (21 g). Salad has little carbohydrate.', speed: 'slow' }
   ]
 }, 'estimating-carbs');
 
 // More Tier 3 meals
 registerMealEvent('ice-cream-trip', 'Ice Cream Trip', 3, {
   scene: 'Summer evening. The ice cream shop. Long line.',
-  companionIntro: "Ice cream has a lot of fat \u2014 it slows the sugar absorption. The BG spike comes later.",
+  companionIntro: "Half a cup of ice cream has 18 g of carbs.",
   foods: [
-    { name: 'Large sundae + toppings', carbs: 65, desc: 'All the fixings. Delicious. Very carby.', speed: 'slow' },
-    { name: 'Single scoop in a cone', carbs: 30, desc: 'Classic. The cone adds about 5g.', speed: 'slow' },
-    { name: 'Single scoop in a cup', carbs: 22, desc: 'Skip the cone, save some carbs.', speed: 'slow' }
+    { name: '1½ cups ice cream', carbs: 54, desc: '1½ cups vanilla ice cream (54 g).', speed: 'slow' },
+    { name: '1 cup ice cream', carbs: 36, desc: '1 cup (36 g).', speed: 'slow' },
+    { name: '½ cup ice cream', carbs: 18, desc: '½ cup (18 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('thanksgiving', 'Thanksgiving Dinner', 3, {
-  scene: 'A massive holiday meal. Turkey, stuffing, mashed potatoes, gravy, cranberry sauce, rolls, pie. All of it.',
+  scene: 'A big holiday meal. Turkey, mashed potatoes, corn, peas, rolls. All of it.',
   companionIntro: "Holiday meals are the hardest \u2014 lots of items, long meal, dessert later. Take it in pieces.",
   foods: [
-    { name: 'Full plate of everything + pie', carbs: 110, desc: 'The whole experience.', speed: 'slow' },
-    { name: 'Moderate plate, pie for later', carbs: 65, desc: 'Save dessert for a bit later.', speed: 'slow' },
-    { name: 'Protein-focused + small portions', carbs: 35, desc: 'Turkey and veggies mostly, small taste of the rest.', speed: 'slow' }
+    { name: 'A bit of everything', carbs: 78, desc: '1 cup mashed potatoes (38 g) + ½ cup corn (19 g) + a roll (21 g) + turkey.', speed: 'slow' },
+    { name: 'Moderate plate', carbs: 38, desc: '½ cup mashed potatoes (19 g) + ½ cup corn (19 g) + turkey.', speed: 'slow' },
+    { name: 'Mostly turkey and veggies', carbs: 18, desc: '½ cup peas (12 g) + ½ cup carrots (6 g) + turkey.', speed: 'slow' }
   ]
 }, 'restaurant-carbs');
 
@@ -1253,22 +1256,22 @@ registerMealEvent('thanksgiving', 'Thanksgiving Dinner', 3, {
 registerMealEvent('bagel-morning', 'Bagel Morning', 1, {
   scene: 'Kitchen. A bag of fresh bagels on the counter.',
   place: '🏠 🌅',
-  companionIntro: 'Bagels are bigger than they look. One bagel is a lot of bread.',
+  companionIntro: 'One plain bagel has about 38 g of carbs, more than two slices of bread.',
   foods: [
-    { name: 'Whole bagel with cream cheese', carbs: 50, desc: 'A full bagel. Dense and filling.', speed: 'slow' },
-    { name: 'Half a bagel + egg', carbs: 25, desc: 'Half the bread, plus protein from the egg.', speed: 'slow' },
-    { name: 'English muffin + seed butter', carbs: 28, desc: 'A smaller bread with sunflower seed butter.', speed: 'slow' }
+    { name: 'Bagel with cream cheese', carbs: 38, desc: 'One plain bagel (38 g).', speed: 'slow' },
+    { name: 'Half a bagel + egg', carbs: 20, desc: 'Half a bagel (19 g) + egg (1 g).', speed: 'slow' },
+    { name: 'English muffin + egg', carbs: 27, desc: 'English muffin (26 g) + egg (1 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('oatmeal-bar', 'Oatmeal Bar', 1, {
   scene: 'A pot of oatmeal and a row of toppings.',
   place: '🏠 🌅',
-  companionIntro: 'Oatmeal is a slow carb. The toppings change the total.',
+  companionIntro: '¾ cup of cooked oatmeal has 17 g of carbs. The toppings change the total.',
   foods: [
-    { name: 'Oatmeal with raisins and brown sugar', carbs: 45, desc: 'Sweet and cozy. Dried fruit adds up.', speed: 'slow' },
-    { name: 'Oatmeal with berries and milk', carbs: 35, desc: 'Fresh fruit and a splash of milk.', speed: 'slow' },
-    { name: 'Small oatmeal with nuts and cinnamon', carbs: 22, desc: 'Smaller bowl, crunchy topping.', speed: 'slow' }
+    { name: 'Oatmeal + raisins', carbs: 46, desc: '¾ cup oatmeal (17 g) + ¼ cup raisins (29 g).', speed: 'slow' },
+    { name: 'Oatmeal + blueberries + milk', carbs: 40, desc: '¾ cup oatmeal (17 g) + ½ cup blueberries (11 g) + 1 cup milk (12 g).', speed: 'slow' },
+    { name: 'Oatmeal + almonds', carbs: 24, desc: '¾ cup oatmeal (17 g) + ¼ cup almonds (7 g).', speed: 'slow' }
   ]
 });
 
@@ -1276,9 +1279,9 @@ registerMealEvent('breakfast-wrap', 'Breakfast Wraps', 1, {
   scene: 'Someone is making breakfast wraps to go.',
   place: '🏠 🌅',
   foods: [
-    { name: 'Egg and cheese wrap', carbs: 25, desc: 'One tortilla, eggs and cheese.', speed: 'slow' },
-    { name: 'Breakfast burrito with potatoes', carbs: 45, desc: 'Eggs, beans and potatoes in a big tortilla.', speed: 'slow' },
-    { name: 'Fruit cup + plain yogurt', carbs: 30, desc: 'No wrap. Just fruit and yogurt.', speed: 'fast' }
+    { name: 'Egg and cheese wrap', carbs: 29, desc: 'Wheat tortilla (27 g) + egg (1 g) + cheese (1 g).', speed: 'slow' },
+    { name: 'Bean breakfast burrito', carbs: 57, desc: 'Wheat tortilla (27 g) + ¾ cup black beans (29 g) + egg (1 g).', speed: 'slow' },
+    { name: 'Yogurt + peaches', carbs: 28, desc: '¾ cup plain yogurt (13 g) + ½ cup canned peaches (15 g).', speed: 'slow' }
   ]
 });
 
@@ -1286,20 +1289,20 @@ registerMealEvent('pita-lunch', 'Pita Lunch', 1, {
   scene: 'Lunch. A plate of pita, hummus, veggies and falafel.',
   place: '🏫 🍽️',
   foods: [
-    { name: 'Falafel wrap in pita', carbs: 50, desc: 'Falafel, veggies and sauce in a big pita.', speed: 'slow' },
-    { name: 'Half pita + hummus + veggies', carbs: 25, desc: 'Dip and crunch.', speed: 'slow' },
-    { name: 'Greek salad with chicken', carbs: 10, desc: 'Lettuce, cucumber, tomato, feta and chicken.', speed: 'slow' }
+    { name: 'Pita with hummus and veggies', carbs: 41, desc: 'One pita (33 g) + ¼ cup hummus (8 g).', speed: 'slow' },
+    { name: 'Half a pita + hummus', carbs: 25, desc: 'Half a pita (17 g) + ¼ cup hummus (8 g).', speed: 'slow' },
+    { name: 'Greek salad + crackers', carbs: 11, desc: 'Salad with chicken + 4 whole wheat crackers (11 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('dumplings', 'Dumpling Night', 1, {
   scene: 'Steaming baskets of dumplings at dinner.',
   place: '🏠 🌆',
-  companionIntro: 'Dumpling wrappers are dough, so they carry the carbs. Count the dumplings!',
+  companionIntro: 'Each dumpling has about 8 g of carbs. Count the dumplings!',
   foods: [
-    { name: '8 dumplings + fried rice', carbs: 70, desc: 'A big dinner. The rice adds a lot.', speed: 'slow' },
-    { name: '8 dumplings', carbs: 40, desc: 'Just the dumplings with dipping sauce.', speed: 'slow' },
-    { name: '4 dumplings + veggie soup', carbs: 25, desc: 'Fewer dumplings and a light soup.', speed: 'slow' }
+    { name: '8 dumplings + rice', carbs: 88, desc: '8 dumplings (64 g) + ½ cup rice (24 g).', speed: 'slow' },
+    { name: '8 dumplings', carbs: 64, desc: '8 dumplings (8 g each).', speed: 'slow' },
+    { name: '4 dumplings + broth', carbs: 32, desc: '4 dumplings (32 g).', speed: 'slow' }
   ]
 });
 
@@ -1307,31 +1310,31 @@ registerMealEvent('bento-box', 'Bento Box Lunch', 2, {
   scene: 'Your lunch box has little sections for each food.',
   place: '🏫 🍱',
   foods: [
-    { name: 'Rice + teriyaki salmon', carbs: 50, desc: 'A cup of rice and salmon. Teriyaki sauce is sweet too.', speed: 'slow' },
-    { name: 'Sushi rolls (6 pieces)', carbs: 35, desc: 'Sushi rice is a carb, even in little rolls.', speed: 'slow' },
-    { name: 'Noodle soup thermos', carbs: 40, desc: 'Warm noodles in broth.', speed: 'slow' }
+    { name: 'Rice + salmon', carbs: 48, desc: '1 cup rice (48 g) + salmon.', speed: 'slow' },
+    { name: 'Sushi (4 pieces)', carbs: 35, desc: '4 pieces sushi with fish (35 g).', speed: 'slow' },
+    { name: 'Noodles in broth', carbs: 42, desc: '1 cup egg noodles (42 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('chili-pot', 'Big Pot of Chili', 2, {
   scene: 'A pot of chili has been cooking all afternoon.',
   place: '🏠 🌆',
-  companionIntro: 'Beans have carbs AND fibre. They are a slow, steady carb.',
+  companionIntro: 'Beans have carbs and lots of fibre.',
   foods: [
-    { name: 'Chili + cornbread', carbs: 55, desc: 'A bowl of chili with a square of cornbread.', speed: 'slow' },
-    { name: 'Chili over rice', carbs: 60, desc: 'Chili poured over a cup of rice.', speed: 'slow' },
-    { name: 'Bowl of chili', carbs: 30, desc: 'Just the chili, extra cheese on top.', speed: 'slow' }
+    { name: 'Chili + a bun', carbs: 44, desc: '1 cup chili (23 g) + a bun (21 g).', speed: 'slow' },
+    { name: 'Chili over rice', carbs: 47, desc: '1 cup chili (23 g) + ½ cup rice (24 g).', speed: 'slow' },
+    { name: 'Bowl of chili', carbs: 23, desc: '1 cup chili (23 g).', speed: 'slow' }
   ]
 });
 
-registerMealEvent('roti-dinner', 'Roti and Curry', 2, {
-  scene: 'Dinner at a friend\'s house. Their family made roti and curry.',
+registerMealEvent('roti-dinner', 'Curry Night', 2, {
+  scene: 'Dinner at a friend\'s house. Their family made naan and curry.',
   place: '🏡 🌆',
-  companionIntro: 'Roti is the bread here. Dal and chickpeas have carbs too.',
+  companionIntro: 'Naan is the bread here. Chickpeas and lentils have carbs too.',
   foods: [
-    { name: 'Two roti + chickpea curry', carbs: 65, desc: 'Two pieces of roti and a bowl of chana.', speed: 'slow' },
-    { name: 'One roti + chicken curry', carbs: 35, desc: 'One roti and curry with chicken.', speed: 'slow' },
-    { name: 'Dal + rice', carbs: 55, desc: 'Lentil curry with a cup of rice.', speed: 'slow' }
+    { name: 'Naan + chickpea curry', carbs: 76, desc: 'Half a naan (36 g) + ¾ cup chickpeas (40 g).', speed: 'slow' },
+    { name: 'Naan + chicken curry', carbs: 36, desc: 'Half a naan (36 g).', speed: 'slow' },
+    { name: 'Lentil dal + rice', carbs: 53, desc: '¾ cup lentils (29 g) + ½ cup rice (24 g).', speed: 'slow' }
   ]
 });
 
@@ -1340,31 +1343,80 @@ registerMealEvent('potluck', 'Community Potluck', 2, {
   place: '🏛️ 🍽️',
   companionIntro: 'Potlucks are a carb-counting puzzle. Take a little of a few things.',
   foods: [
-    { name: 'Stew + a piece of bannock', carbs: 45, desc: 'Hearty stew and a warm piece of bannock.', speed: 'slow' },
-    { name: 'Wild rice salad + turkey', carbs: 30, desc: 'A scoop of wild rice salad and sliced turkey.', speed: 'slow' },
-    { name: 'A bit of everything', carbs: 60, desc: 'A small scoop of every dish. Hard to count!', speed: 'slow' }
+    { name: 'Bannock + chili', carbs: 42, desc: 'Bannock (19 g) + 1 cup chili (23 g).', speed: 'slow' },
+    { name: 'Wild rice + turkey', carbs: 18, desc: '½ cup wild rice (18 g) + turkey.', speed: 'slow' },
+    { name: 'A bit of everything', carbs: 56, desc: 'Bannock (19 g) + ½ cup wild rice (18 g) + ½ cup mashed potatoes (19 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('hockey-poutine', 'Hockey Game Snack Bar', 3, {
   scene: 'Weekend hockey game at the arena. The snack bar smells amazing.',
   place: '🏒 🥅',
-  companionIntro: 'Fries soak up gravy and cheese curds. The fries are where the carbs are.',
+  companionIntro: 'One cup of poutine has about 25 g of carbs.',
   foods: [
-    { name: 'Large poutine', carbs: 75, desc: 'Fries, gravy, cheese curds. A big bowl.', speed: 'slow' },
-    { name: 'Small poutine', carbs: 40, desc: 'The kid-size bowl.', speed: 'slow' },
-    { name: 'Hot dog + water', carbs: 25, desc: 'One hot dog in a bun.', speed: 'slow' }
+    { name: 'Large poutine', carbs: 50, desc: '2 cups poutine (25 g per cup).', speed: 'slow' },
+    { name: 'Small poutine', carbs: 25, desc: '1 cup poutine (25 g).', speed: 'slow' },
+    { name: 'Hot dog + water', carbs: 21, desc: 'Bun (21 g).', speed: 'slow' }
   ]
 });
 
 registerMealEvent('pho-shop', 'Noodle Soup Restaurant', 3, {
   scene: 'A busy restaurant. Giant bowls of noodle soup go by.',
   place: '🍜 🏙️',
-  companionIntro: 'The noodles are the carbs. The broth has almost none.',
+  companionIntro: 'One cup of rice noodles has about 46 g of carbs.',
   foods: [
-    { name: 'Large bowl of pho', carbs: 70, desc: 'A huge bowl. Lots of rice noodles.', speed: 'slow' },
-    { name: 'Small bowl of pho', carbs: 40, desc: 'The smaller size.', speed: 'slow' },
-    { name: 'Fresh rolls + small soup', carbs: 35, desc: 'Two fresh rolls and a cup of broth with a few noodles.', speed: 'slow' }
+    { name: 'Large bowl of pho', carbs: 92, desc: '2 cups rice noodles (46 g per cup).', speed: 'slow' },
+    { name: 'Small bowl of pho', carbs: 46, desc: '1 cup rice noodles (46 g).', speed: 'slow' },
+    { name: 'Light bowl', carbs: 23, desc: '½ cup rice noodles (23 g) in broth.', speed: 'slow' }
+  ]
+});
+
+// Which meal of the day each meal event can be. Events with no entry here are never
+// drawn (ice cream trip: a treat outing, not a meal). 'sick' meals are only for Friday.
+const MEAL_SLOTS = {
+  'pancake': ['breakfast'], 'yogurt-bowl': ['breakfast'], 'bagel-morning': ['breakfast'], 'oatmeal-bar': ['breakfast'],
+  'breakfast-wrap': ['breakfast'], 'smoothie-trap': ['breakfast'],
+  'sandwich': ['lunch'], 'hotdog': ['lunch'], 'pita-lunch': ['lunch'], 'bento-box': ['lunch'], 'cafeteria-wildcard': ['lunch'],
+  'fruit-salad': ['lunch'], 'not-hungry': ['lunch'], 'movie-snacks': ['lunch'],
+  'soup': ['lunch', 'dinner'], 'chicken-rice': ['lunch', 'dinner'], 'hockey-poutine': ['lunch', 'dinner'], 'pho-shop': ['lunch', 'dinner'],
+  'birthday-pizza': ['lunch', 'dinner'], 'potluck': ['lunch', 'dinner'],
+  'taco': ['dinner'], 'grandma': ['dinner'], 'protein-plate': ['dinner'], 'restaurant-no-info': ['dinner'], 'cultural-feast': ['dinner'],
+  'cook-own': ['dinner'], 'buffet': ['dinner'], 'pasta-night': ['dinner'], 'thanksgiving': ['dinner'], 'dumplings': ['dinner'],
+  'chili-pot': ['dinner'], 'roti-dinner': ['dinner'],
+  'sick-lunch': ['sick-lunch'], 'sick-dinner': ['sick-dinner']
+};
+// Weekend-only lunches (you're not at school).
+const WEEKEND_ONLY = ['movie-snacks', 'birthday-pizza', 'hockey-poutine', 'potluck'];
+
+function pickMeal(slot, tier, seen, day) {
+  const fits = e => (MEAL_SLOTS[e.id] || []).includes(slot) &&
+    !(isWeekend(day) && SCHOOL_ONLY.includes(e.id)) &&
+    !(!isWeekend(day) && slot === 'lunch' && WEEKEND_ONLY.includes(e.id));
+  const pool = mealPool.filter(fits);
+  const fresh = pool.filter(e => e.tier <= tier && !seen.includes(e.id));
+  return pick(fresh.length ? fresh : pool.filter(e => e.tier <= tier)) || pick(pool) || null;
+}
+
+// --- Gentle meals for the sick day ---
+registerMealEvent('sick-lunch', 'Something Gentle for Lunch', 1, {
+  scene: 'Home sick. Your tummy is still a bit off, so lunch is something easy.',
+  place: '🛋️ 🤒',
+  companionIntro: 'Small and easy is fine today. Keep sipping fluids too.',
+  foods: [
+    { name: 'Chicken noodle soup + crackers', carbs: 27, desc: '1 cup soup (18 g) + 4 saltines (9 g).', speed: 'slow' },
+    { name: 'Toast + applesauce', carbs: 33, desc: '1 slice white toast (18 g) + ½ cup unsweetened applesauce (15 g).', speed: 'slow' },
+    { name: 'Plain rice + chicken', carbs: 24, desc: '½ cup rice (24 g).', speed: 'slow' }
+  ]
+});
+
+registerMealEvent('sick-dinner', 'An Easy Dinner', 1, {
+  scene: 'Evening. You\'re feeling a bit better and a bit hungry.',
+  place: '🏠 🌆',
+  companionIntro: 'Feeling better? Something simple is a good idea.',
+  foods: [
+    { name: 'Scrambled eggs + toast', carbs: 20, desc: '2 eggs (2 g) + 1 slice white toast (18 g).', speed: 'slow' },
+    { name: 'Plain spaghetti', carbs: 42, desc: '1 cup cooked spaghetti (42 g).', speed: 'slow' },
+    { name: 'Tomato soup + crackers', carbs: 27, desc: '1 cup tomato soup (18 g) + 4 saltines (9 g).', speed: 'slow' }
   ]
 });
 
@@ -1427,7 +1479,7 @@ registerSocialEvent('supportive-coach', 'The Supportive Coach', 1,
 registerSocialEvent('buddy-system', 'The Buddy System', 1,
   'A close friend says: "I want to learn how to help if you ever have a low. Can you teach me?"',
   [
-    { id: 'teach', text: '"Absolutely! Here\'s what to do..." (Teach the 15-15 rule)', conf: 5, response: 'You walk them through it. They practice pretending to hand you a juice box. You both laugh, but they\'re serious about remembering.', companionSays: 'You just taught someone something that could matter a lot. That\'s real friendship.' },
+    { id: 'teach', text: '"Absolutely! Here\'s what to do..." (Teach them: fast sugar, wait 15 minutes, check again)', conf: 5, response: 'You walk them through it. They practice pretending to hand you a juice box. You both laugh, but they\'re serious about remembering.', companionSays: 'You just taught someone something that could matter a lot. That\'s real friendship.' },
     { id: 'grateful', text: '"That means a lot. Let me show you where I keep my supplies."', conf: 5, response: 'You show them your kit. They ask good questions. It feels good to have someone in your corner.', companionSays: 'Building your support team, one person at a time.' },
     { id: 'later', text: '"Thanks! Can we do it another time? I appreciate you asking."', conf: 3, response: '"Totally. Whenever you\'re ready." They mean it.', companionSays: 'The offer stands. That\'s what matters.' }
   ], 'support-team'
@@ -1445,7 +1497,7 @@ registerSocialEvent('show-tell', 'Show and Tell', 1,
 registerSocialEvent('cinnamon-grandma', 'The Cinnamon Cure', 2,
   'A well-meaning adult says: "My neighbour cured her diabetes with cinnamon and a special diet. You should try that!"',
   [
-    { id: 'explain', text: '"Type 1 is different from Type 2. My immune system destroyed the cells that make insulin. No diet can fix that."', conf: 5, response: 'They look a bit embarrassed but nod. "Oh, I didn\'t know there were different types."', companionSays: 'Handled with grace. Not everyone knows the difference — and now one more person does.' },
+    { id: 'explain', text: '"Type 1 is different from Type 2. My immune system destroyed the cells that make insulin. That\'s why I need insulin."', conf: 5, response: 'They look a bit embarrassed but nod. "Oh, I didn\'t know there were different types."', companionSays: 'Handled with grace. Not everyone knows the difference — and now one more person does.' },
     { id: 'diplomatic', text: '"Thanks, I\'ll ask my doctor about that."', conf: 3, response: 'They feel heard, you didn\'t have to argue. Win-win.', companionSays: 'The diplomatic deflection. A classic.' },
     { id: 'smile', text: 'Smile and change the subject.', conf: 3, response: 'You redirect the conversation smoothly. You don\'t need to educate everyone.', companionSays: 'You don\'t owe anyone a biology lesson.' }
   ], 'what-is-t1d'
@@ -1481,7 +1533,7 @@ registerSocialEvent('left-out', 'Feeling Left Out', 2,
 registerSocialEvent('food-police', '"Are You Allowed to Eat That?"', 2,
   'Someone watches you eat a cookie and says: "Are you allowed to eat that? I thought diabetics couldn\'t have sugar."',
   [
-    { id: 'educate', text: '"People with T1D can eat anything — we just take insulin for it."', conf: 5, response: '"Oh! I didn\'t know that. Sorry for assuming." They look genuinely surprised and a little sheepish.', companionSays: 'One more person who gets it now. You\'re changing minds one cookie at a time.' },
+    { id: 'educate', text: '"Kids with T1D eat the same healthy foods as everyone else. We count the carbs and take insulin."', conf: 5, response: '"Oh! I didn\'t know that. Sorry for assuming." They look genuinely surprised and a little sheepish.', companionSays: 'One more person who gets it now. You\'re changing minds one cookie at a time.' },
     { id: 'short', text: '"Yep. I can eat whatever I want."', conf: 5, response: 'You take a bite. Eye contact maintained. Power move.', companionSays: 'Short, confident, done. Respect.' },
     { id: 'ignore', text: 'Keep eating without responding.', conf: 3, response: 'They get the message. You enjoy your cookie.', companionSays: 'Sometimes silence says everything.' }
   ], 'setting-boundaries'
@@ -1636,7 +1688,7 @@ registerEmotionalEvent('pride', 'Pride', 3,
 registerEmotionalEvent('why-me', 'Why Me?', 2,
   'A quiet moment lying on your bed. The question sneaks up like it always does: why does this have to be my life? What did I do?',
   [
-    { id: 'nothing', text: '"Nothing. I didn\'t do anything. It just happened."', conf: 5, response: 'You let that truth settle. It wasn\'t caused by anything you ate or didn\'t do. That\'s a strange kind of relief.', companionSays: 'You didn\'t cause this. Nothing you ate, nothing you did. T1D is autoimmune \u2014 your immune system made a mistake.' },
+    { id: 'nothing', text: '"Nothing. I didn\'t do anything. It just happened."', conf: 5, response: 'You let that truth settle. It wasn\'t caused by anything you ate or didn\'t do. That\'s a strange kind of relief.', companionSays: 'T1D is autoimmune. Your immune cells attacked the cells that make insulin by mistake.' },
     { id: 'unfair', text: '"It\'s not fair."', conf: 4, response: 'You acknowledge it \u2014 it isn\'t fair. And somehow saying it out loud makes it a little lighter.', companionSays: "It\u2019s not fair. That\u2019s a true thing. You\u2019re allowed to say it." },
     { id: 'shrug-it-off', text: '"I\'m not going to think about this right now."', conf: 2, response: 'You roll over and put your phone in your hand. Sometimes the answer is "not tonight."', companionSays: 'You don\'t have to have the big thoughts every day. Sometimes you just live the day.' }
   ], 'feelings-valid'
@@ -1726,8 +1778,8 @@ practicalPool.push({
       content: (s) => {
         const chosen = s.narrative.choices[p];
         return '<p>' + (chosen === 'rotate'
-          ? 'New site is in a well-rested spot. Rotating prevents scar tissue and keeps absorption consistent.'
-          : 'It works, but using the same area too often can cause scar tissue. Try to move further next time.') + '</p>';
+          ? 'New site is in a well-rested spot. Rotating helps prevent fatty lumps that can make insulin work poorly.'
+          : 'It works, but using the same spot again and again can cause fatty lumps that make insulin work poorly. Try to move further next time.') + '</p>';
       },
       onEnter: () => {
         if (collectBetaCell('site-rotation')) setTimeout(() => showBetaCellNotification(betaCellMap['site-rotation'].name, betaCellMap['site-rotation'].cat), 500);
@@ -1828,7 +1880,7 @@ const miniGameSchedule = {
   3: { am: { name: 'Mealtime Routine',  desc: 'Walk through the steps you follow at every meal.' },
        pm: { name: 'Pack Your Bag',     desc: 'Pack everything you need for a day at school.' } },
   4: { am: { name: 'Portion Estimator', desc: 'Look at the plate and estimate the carbs.' },
-       pm: { name: 'Glucose Roller',    desc: 'Keep the ball in the green zone. See how BG has momentum.' } },
+       pm: { name: 'Glucose Roller',    desc: 'A just-for-fun game: keep the ball in the green zone.' } },
   5: { am: { name: 'Label Reader',      desc: 'Crackers and soup are about all you can manage. Read the labels.' },
        pm: { name: 'Sick Day Protocol', desc: 'Step through what to do on a sick day.' } },
   6: { am: { name: 'Pack Your Bag',     desc: 'Pack for a Saturday out with friends.' },
@@ -1912,31 +1964,38 @@ MiniGames['Carb Counter'] = {
   intro: { emoji: '🥪', how: [
     'You\'ll see a plate of food with portion sizes.',
     'Add up the carbs and type your total. Use the reference chart if you like.',
-    'There\'s no timer. Close is great: carb counting is always an estimate.'] },
+    'There\'s no timer. Diabetes Canada suggests trying to be within about 5 g.'] },
   play: function(opts, onComplete) {
     const tier = opts.tier || 1;
+    // Health Canada, Nutrient Value of Some Common Foods (2008). See design/fact-sources.md.
     const pool = [
       { emoji: '🍎', name: 'Apple', portion: '1 medium', carbs: 19 },
       { emoji: '🍌', name: 'Banana', portion: '1 medium', carbs: 27 },
-      { emoji: '🥛', name: 'Milk', portion: '250 mL', carbs: 13 },
-      { emoji: '🥯', name: 'Bagel', portion: '1 plain', carbs: 48 },
-      { emoji: '🍞', name: 'Bread', portion: '1 slice', carbs: 15 },
-      { emoji: '🍚', name: 'White rice', portion: '1/2 cup cooked', carbs: 22 },
-      { emoji: '🍝', name: 'Pasta', portion: '1 cup cooked', carbs: 40 },
-      { emoji: '🥔', name: 'Potato', portion: '1 medium', carbs: 26 },
-      { emoji: '🥕', name: 'Carrots', portion: '1 cup', carbs: 12 },
-      { emoji: '🧀', name: 'Cheddar', portion: '1 slice', carbs: 1 },
-      { emoji: '🥚', name: 'Eggs', portion: '2 large', carbs: 1 },
-      { emoji: '🍇', name: 'Grapes', portion: '1 cup', carbs: 16 },
-      { emoji: '🍓', name: 'Strawberries', portion: '1 cup', carbs: 11 },
-      { emoji: '🥣', name: 'Oatmeal', portion: '1/2 cup cooked', carbs: 14 },
-      { emoji: '🥨', name: 'Pretzels', portion: '1 small bag', carbs: 23 },
-      { emoji: '🍪', name: 'Cookies', portion: '2 small', carbs: 20 },
-      { emoji: '🌮', name: 'Corn tortilla', portion: '1 small', carbs: 12 },
-      { emoji: '🥦', name: 'Broccoli', portion: '1 cup', carbs: 6 },
-      { emoji: '🫘', name: 'Black beans', portion: '1/2 cup', carbs: 20 },
-      { emoji: '🍐', name: 'Pear', portion: '1 small', carbs: 22 },
-      { emoji: '🧇', name: 'Waffle', portion: '1 frozen', carbs: 15 }
+      { emoji: '🍊', name: 'Orange', portion: '1', carbs: 15 },
+      { emoji: '🍐', name: 'Pear', portion: '1', carbs: 26 },
+      { emoji: '🍇', name: 'Grapes', portion: '20 grapes', carbs: 18 },
+      { emoji: '🍓', name: 'Strawberries', portion: '7', carbs: 6 },
+      { emoji: '🫐', name: 'Blueberries', portion: '½ cup', carbs: 11 },
+      { emoji: '🥛', name: 'Milk', portion: '1 cup (250 mL)', carbs: 12 },
+      { emoji: '🥣', name: 'Plain yogurt', portion: '¾ cup', carbs: 13 },
+      { emoji: '🧀', name: 'Cheddar', portion: '50 g', carbs: 1 },
+      { emoji: '🥚', name: 'Egg', portion: '1 large', carbs: 1 },
+      { emoji: '🍞', name: 'White bread', portion: '1 slice', carbs: 18 },
+      { emoji: '🍞', name: 'Whole wheat bread', portion: '1 slice', carbs: 16 },
+      { emoji: '🥯', name: 'Bagel', portion: '1 plain', carbs: 38 },
+      { emoji: '🍚', name: 'White rice', portion: '½ cup cooked', carbs: 24 },
+      { emoji: '🍝', name: 'Spaghetti', portion: '1 cup cooked', carbs: 42 },
+      { emoji: '🥔', name: 'Baked potato', portion: '1', carbs: 37 },
+      { emoji: '🌽', name: 'Corn', portion: '½ cup', carbs: 19 },
+      { emoji: '🫛', name: 'Peas', portion: '½ cup', carbs: 12 },
+      { emoji: '🥕', name: 'Carrots', portion: '½ cup cooked', carbs: 6 },
+      { emoji: '🥦', name: 'Broccoli', portion: '½ cup cooked', carbs: 6 },
+      { emoji: '🫘', name: 'Black beans', portion: '¾ cup', carbs: 29 },
+      { emoji: '🥣', name: 'Oatmeal', portion: '¾ cup cooked', carbs: 17 },
+      { emoji: '🍿', name: 'Popcorn (air-popped)', portion: '1 cup', carbs: 7 },
+      { emoji: '🍪', name: 'Chocolate chip cookies', portion: '2', carbs: 13 },
+      { emoji: '🌮', name: 'Corn tortilla', portion: '1', carbs: 8 },
+      { emoji: '🧇', name: 'Waffle', portion: '1', carbs: 14 }
     ];
     const n = tier === 1 ? 3 : tier === 2 ? 4 : 5;
     const foods = shuffle(pool).slice(0, n);
@@ -1947,11 +2006,11 @@ MiniGames['Carb Counter'] = {
       '<div class="plate">' + foods.map(f => '<span title="' + f.name + '">' + f.emoji + '</span>').join('') + '</div>' +
       foods.map(f => '<div class="mg-food-row"><div><span class="mg-food-emoji">' + f.emoji + '</span><span class="mg-food-name">' + f.name + '</span></div><span class="mg-food-portion">' + f.portion + '</span></div>').join('') +
       '<details class="mg-legend"><summary><strong>📖 Carb reference</strong> (tap to open)</summary><div class="mg-legend-grid">' +
-        '<div><strong>🍎 Fruit</strong><br>Small (berries, ½ banana) ~10g<br>Medium (apple, orange) ~15-20g<br>Large (big banana) ~25-30g</div>' +
-        '<div><strong>🍞 Grains</strong><br>1 slice bread ~15g<br>½ cup rice / pasta ~20g<br>1 cup rice / pasta ~40-45g<br>1 bagel ~45-50g</div>' +
-        '<div><strong>🥛 Milk</strong><br>1 cup milk ~12-13g<br>Cheese ~0-1g</div>' +
-        '<div><strong>🥦 Veggies &amp; protein</strong><br>1 cup raw veggies ~5g<br>Meat, eggs, fish ~0g<br>Beans ~20g per ½ cup</div>' +
-      '</div></details>' +
+        '<div><strong>🍎 Fruit</strong><br>Apple 19 g<br>Orange 15 g<br>Banana 27 g<br>½ cup blueberries 11 g</div>' +
+        '<div><strong>🍞 Grains</strong><br>1 slice bread 16-18 g<br>½ cup rice 24 g<br>1 cup spaghetti 42 g<br>1 bagel 38 g</div>' +
+        '<div><strong>🥛 Milk</strong><br>1 cup milk 12 g<br>¾ cup plain yogurt 13 g<br>Cheese about 1 g</div>' +
+        '<div><strong>🥦 Veggies &amp; protein</strong><br>½ cup carrots or broccoli 6 g<br>Meat, eggs: little carbohydrate<br>¾ cup beans 29 g</div>' +
+      '</div><p class="src-note">Source: Health Canada, Nutrient Value of Some Common Foods.</p></details>' +
       '<div class="mg-estimate-row"><label for="mg-carb-input">Total carbs:</label><input type="number" id="mg-carb-input" placeholder="0" min="0" max="300"><span>g</span><button class="mg-action-btn" id="mg-submit">Check</button></div>' +
       '<div id="mg-result"></div>');
     setTimeout(() => {
@@ -1977,63 +2036,63 @@ MiniGames['Mealtime Routine'] = {
   intro: { emoji: '🍽️', how: [
     'A few questions about what you do at mealtime.',
     'Pick an answer. If it\'s not the best one, Pip explains why and you can pick again.',
-    'Your own plan comes from your diabetes team. This game is about the steps, not the numbers.'] },
+    'Your own plan comes from your diabetes team. Facts here come from Diabetes Canada.'] },
   play: function(opts, onComplete) {
     const tier = opts.tier || 1;
     const pump = state.player.device.insulin === 'pump';
     const steps = tier <= 2 ? [
-      { art: '🍽️ 🤔', situation: 'Lunch is in front of you: a sandwich, an apple and milk.', q: 'What\'s the first step?',
+      { art: '🍽️ 🤔', situation: 'Lunch is in front of you: a sandwich, an apple and milk.', q: 'Which of these has carbohydrate?',
         choices: [
-          { text: '🩸 Check my BG', correct: true, feedback: 'Yes. Knowing your BG before you eat helps you and your plan.' },
-          { text: '😋 Eat first, think later', correct: false, feedback: 'It helps to check and count before eating, so your insulin can match your food.' },
-          { text: '🔁 Take the same insulin as yesterday', correct: false, feedback: 'Every meal is different. Your plan uses what you\'re eating today.' }
+          { text: '🥪🍎🥛 The bread, the apple and the milk', correct: true, feedback: 'Yes. Diabetes Canada lists grains, fruits and milk as foods with carbohydrate.' },
+          { text: '🥪 Only the bread', correct: false, feedback: 'Bread has carbs, but so do fruit and milk.' },
+          { text: '🍗 Only the turkey', correct: false, feedback: 'Meat has little carbohydrate. The bread, apple and milk are where the carbs are.' }
         ] },
-      { art: '🥪 🍎 🥛 ➜ 🔢', situation: 'BG checked. Now the food.', q: 'What do you need to know about the food?',
+      { art: '🥪 🍎 🥛 ➜ 🔢', situation: 'You want to count the carbs.', q: 'Where can you find the carbs for packaged food?',
         choices: [
-          { text: '🔢 How many carbs it has', correct: true, feedback: 'Right. Carbs are what your mealtime insulin is for.' },
-          { text: '🎨 What colour it is', correct: false, feedback: 'Colour doesn\'t tell you much. Count the carbs.' },
-          { text: '⚖️ How heavy the plate is', correct: false, feedback: 'Weight alone doesn\'t tell you the carbs. Labels, charts and practice do.' }
+          { text: '🏷️ The Nutrition Facts table', correct: true, feedback: 'Right. Check the serving size first, then find Carbohydrate.' },
+          { text: '🎨 The picture on the box', correct: false, feedback: 'The picture doesn\'t tell you much. The Nutrition Facts table does.' },
+          { text: '🤷 Just guess', correct: false, feedback: 'When there\'s a label, use it. It has the numbers you need.' }
         ] },
       { art: pump ? '🔢 ➜ 🎛️' : '🔢 ➜ 🖊️', situation: 'You know the carbs.', q: 'How do you figure out your mealtime insulin?',
         choices: [
-          { text: '📋 Use the plan from my diabetes team', correct: true, feedback: 'Exactly. Everyone\'s plan is different, and your team sets yours. ' + (pump ? 'Your pump uses that plan when you enter the carbs.' : 'Your plan tells you what to take with your pen.') },
-          { text: '🌐 Look it up online', correct: false, feedback: 'Insulin is personal. Only your own diabetes team\'s plan is right for you.' },
-          { text: '🙋 Ask a friend what they take', correct: false, feedback: 'Your friend\'s plan is made for their body. Yours is made for yours.' }
+          { text: '📋 Use the plan from my diabetes team', correct: true, feedback: 'Exactly. Your diabetes team makes your plan. ' + (pump ? 'Your pump uses that plan when you enter the carbs.' : 'Your plan tells you what to take with your pen.') },
+          { text: '🌐 Look it up online', correct: false, feedback: 'Your plan comes from your own diabetes team.' },
+          { text: '🙋 Ask a friend what they take', correct: false, feedback: 'Your friend\'s plan was made for them. Yours comes from your team.' }
         ] },
-      { art: '📈 ⏱️', situation: 'An hour after eating, your BG is higher than before the meal.', q: 'What does that probably mean?',
+      { art: '📈 ⏱️', situation: 'Diabetes Canada has targets for kids and teens.', q: 'What is the target range two hours after a meal?',
         choices: [
-          { text: '🍽️ The food is digesting and the insulin is still working', correct: true, feedback: 'Yes. BG usually goes up after eating and comes back down as insulin works.' },
-          { text: '❌ I did everything wrong', correct: false, feedback: 'Not at all. A rise after eating is normal. Give it time.' },
-          { text: '🍬 I should eat sugar', correct: false, feedback: 'Sugar is for lows (under 4). This is a normal after-meal rise.' }
+          { text: '🟩 5.0 to 10.0', correct: true, feedback: 'Yes. Before meals the target is 4.0 to 8.0. That\'s where this game\'s green zone comes from.' },
+          { text: '🟥 Under 4.0', correct: false, feedback: 'Under 4.0 is a low. The after-meal target is 5.0 to 10.0.' },
+          { text: '🟨 Over 14', correct: false, feedback: 'That\'s high. The after-meal target is 5.0 to 10.0.' }
         ] }
     ] : [
-      { art: '🎂 🍕 🤷', situation: 'Birthday party. No labels anywhere.', q: 'How do you count the carbs?',
+      { art: '🎂 🍕 🤷', situation: 'Birthday party. No labels anywhere.', q: 'How can you estimate the carbs?',
         choices: [
-          { text: '✋ Estimate using what I know (fist = about 1 cup)', correct: true, feedback: 'Yes. Estimating is a real skill, and close is good enough.' },
-          { text: '🙅 Skip eating', correct: false, feedback: 'You can enjoy the party. Estimating gets easier with practice.' },
-          { text: '🎲 Guess a random number', correct: false, feedback: 'Use what you know about portions instead. Your hand is a handy measuring tool.' }
+          { text: '✊ Use the Handy Portion Guide and foods I know', correct: true, feedback: 'Yes. A fist-sized amount of grains or fruit, and what you know about common foods.' },
+          { text: '🙅 Skip eating', correct: false, feedback: 'You can enjoy the party. Estimating is a skill you can use anywhere.' },
+          { text: '🎲 Pick a random number', correct: false, feedback: 'Use what you know instead, like the Handy Portion Guide.' }
         ] },
-      { art: '🍕 🧀 🍟', situation: 'Pizza and fries have a lot of fat.', q: 'How can fat change what BG does?',
+      { art: '⏱️ 💉', situation: 'Diabetes Canada describes rapid-acting mealtime insulin.', q: 'When is it usually taken?',
         choices: [
-          { text: '🐢 It slows digestion, so BG may rise later than usual', correct: true, feedback: 'Right. With fatty meals, BG can rise hours later. Your diabetes team can help you plan for these meals.' },
-          { text: '🚫 Fat doesn\'t matter at all', correct: false, feedback: 'Fat slows down how fast carbs reach your blood, so it changes the timing.' },
-          { text: '⚡ Fat makes BG jump right away', correct: false, feedback: 'It\'s the other way around: fat slows things down.' }
+          { text: '⏱️ 0 to 15 minutes before the meal (your team decides your timing)', correct: true, feedback: 'Yes. Your diabetes team tells you what timing is right for you.' },
+          { text: '🌙 Only at bedtime', correct: false, feedback: 'Mealtime insulin is for meals. Your team decides the timing.' },
+          { text: '❌ Never with meals', correct: false, feedback: 'It\'s called mealtime insulin because it goes with meals.' }
         ] },
-      { art: '📈 ⏱️ 🤔', situation: 'You followed your plan, but an hour later BG is climbing.', q: 'What\'s a good move?',
+      { art: '🤒 📈', situation: 'You\'re sick and your BG before meals stays above 14.', q: 'What does Diabetes Canada recommend checking?',
         choices: [
-          { text: '⏳ Give the insulin time to work, then check again', correct: true, feedback: 'Yes. Insulin takes a while. Taking more too soon can stack up and cause a low.' },
-          { text: '💉 Take more insulin right away', correct: false, feedback: 'Insulin you already took is still working. Taking more too soon can stack up. Follow your plan for highs.' },
-          { text: '🏃 Run around to burn it off', correct: false, feedback: 'Exercise with fresh insulin working can make BG drop fast. Give it time first.' }
+          { text: '🧪 Ketones', correct: true, feedback: 'Right. Check ketones when you\'re sick with high blood sugar, or when BG before meals stays above 14.0.' },
+          { text: '🌡️ Only your temperature', correct: false, feedback: 'Temperature matters, but ketones are the key check.' },
+          { text: '🙈 Nothing', correct: false, feedback: 'Sick plus high BG means checking ketones.' }
         ] },
-      { art: '🧒 ➜ 🧑', situation: 'You\'re growing, starting new sports, and life is busy.', q: 'What about your plan?',
+      { art: '🍽️ 🔢', situation: 'Diabetes Canada gives a general guide for carbs.', q: 'About how many grams do most people aim for at a meal?',
         choices: [
-          { text: '🔄 It can change over time, so I check in with my diabetes team', correct: true, feedback: 'Exactly. Growing, activity, being sick and stress can all change what you need.' },
-          { text: '🔒 Once it\'s set, it never changes', correct: false, feedback: 'Plans change as you grow and as life changes. Your team helps you update it.' },
-          { text: '✏️ I change it myself whenever', correct: false, feedback: 'Changes to your plan are something to work out with your diabetes team.' }
+          { text: '🍽️ 45 to 60 g (your dietitian sets your own goal)', correct: true, feedback: 'Yes. And 15 to 30 g at snacks. Your dietitian helps set your own goal.' },
+          { text: '0 g', correct: false, feedback: 'Carbs are part of healthy eating. Most people aim for 45 to 60 g at meals.' },
+          { text: '200 g', correct: false, feedback: 'That\'s much more than the general guide of 45 to 60 g.' }
         ] }
     ];
     runSteps('🍽️ Mealtime Routine', 'Pick an answer. You can change it any time.', steps,
-      '<p><strong>Nice work!</strong> Check, count, follow your plan, then give it time. That\'s the routine.</p>',
+      '<p><strong>Nice work!</strong> Know where the carbs are, count them, and follow your team\'s plan.</p>',
       onComplete);
   }
 };
@@ -2046,27 +2105,31 @@ MiniGames['Treat-the-Low'] = {
     'If you pick something that isn\'t fast, Pip will tell you why and you can pick again.'] },
   play: function(opts, onComplete) {
     const bg = state.bg.current;
-    const tabs = { emoji: '🍬', name: 'Glucose tabs', note: '~15g', good: true, why: 'Glucose tabs are made for lows. They work fast and fit in a pocket.' };
+    // Fast sugars: Diabetes Canada CPG ch. 14, Table 4. Amounts are not shown: for kids they
+    // depend on age (CPG ch. 34, Table 2), so the game says the diabetes team decides.
+    const tabs = { emoji: '🍬', name: 'Glucose tablets', good: true, why: 'Diabetes Canada says glucose tablets are one of the best choices for a low.' };
     const otherGood = [
-      { emoji: '🥄', name: 'Sugar dissolved in water', note: '1 tbsp', good: true, why: 'Plain sugar in water gets into your blood quickly.' },
-      { emoji: '🍯', name: 'Honey', note: '1 tbsp', good: true, why: 'Honey is fast sugar. A spoonful does the job.' },
-      { emoji: '🧃', name: 'Juice', note: '¾ cup', good: true, why: 'A small glass of juice works fast. Great for a low, even though it isn\'t an everyday drink.' }
+      { emoji: '🥄', name: 'Sugar dissolved in water', good: true, why: 'Table sugar dissolved in water is on Diabetes Canada\'s list of fast sugars.' },
+      { emoji: '🧊', name: 'Sugar cubes', good: true, why: 'Sugar cubes are on Diabetes Canada\'s list of fast sugars.' },
+      { emoji: '🍯', name: 'Honey', good: true, why: 'Honey is on Diabetes Canada\'s list of fast sugars.' },
+      { emoji: '🧃', name: 'Juice box', good: true, why: 'Juice is on Diabetes Canada\'s list of fast sugars. Glucose tablets are an even better choice.' }
     ];
-    if (Math.random() < 0.15) otherGood.push({ emoji: '🥤', name: 'Regular pop (not diet)', note: '¾ cup', good: true, why: 'Regular pop has fast sugar, so it works for a low. It\'s not an everyday drink.' });
+    if (Math.random() < 0.15) otherGood.push({ emoji: '🥤', name: 'Regular pop (not diet)', good: true, why: 'Regular soft drinks are on Diabetes Canada\'s list of fast sugars. Canada\'s Food Guide calls them sugary drinks, so they\'re not an everyday drink.' });
     const notIdeal = [
-      { emoji: '🍫', name: 'Chocolate bar', good: false, why: 'The fat in chocolate slows the sugar down. Too slow for a low.' },
-      { emoji: '🥜', name: 'Handful of nuts', good: false, why: 'Nuts are mostly fat and protein. Great later, but they won\'t bring BG up fast.' },
-      { emoji: '🧀', name: 'Cheese stick', good: false, why: 'Cheese has almost no carbs, so it won\'t raise BG.' },
-      { emoji: '🍎', name: 'Whole apple', good: false, why: 'The fibre in an apple slows it down. A good snack, but not fast enough for a low.' },
-      { emoji: '🍨', name: 'Ice cream', good: false, why: 'The fat in ice cream slows the sugar down.' },
-      { emoji: '🥤', name: 'Diet pop', good: false, why: 'Diet pop has no sugar at all, so it can\'t raise BG.' },
-      { emoji: '💧', name: 'Water', good: false, why: 'Water is great, but it has no sugar. You need fast sugar first.' },
-      { emoji: '🥛', name: 'Glass of milk', good: false, why: 'Milk has protein and fat that slow it down. Better as the snack afterwards.' }
+      { emoji: '🍫', name: 'Chocolate bar', good: false, why: 'Chocolate isn\'t on Diabetes Canada\'s list of fast sugars for lows.' },
+      { emoji: '🥜', name: 'Handful of nuts', good: false, why: 'Nuts have very little carbohydrate, so they won\'t fix a low.' },
+      { emoji: '🧀', name: 'Cheese stick', good: false, why: 'Cheese has almost no carbohydrate.' },
+      { emoji: '🍎', name: 'Whole apple', good: false, why: 'An apple isn\'t on the list of fast sugars for lows. Save it for the snack afterwards.' },
+      { emoji: '🍨', name: 'Ice cream', good: false, why: 'Ice cream isn\'t on the list of fast sugars for lows.' },
+      { emoji: '🥤', name: 'Diet pop', good: false, why: 'Diet pop has no sugar, so it can\'t raise BG.' },
+      { emoji: '💧', name: 'Water', good: false, why: 'Water has no sugar. Fast sugar first.' },
+      { emoji: '🥛', name: 'Glass of milk', good: false, why: 'Diabetes Canada says milk raises blood sugar more slowly. Better for the snack afterwards.' }
     ];
     const options = shuffle([tabs, pick(otherGood)].concat(shuffle(notIdeal).slice(0, 2)));
     renderMGPanel(
       '<h2>⚠️ Treat the Low</h2>' +
       '<p class="mg-subtitle">BG: <strong class="bg-big red">' + bg.toFixed(1) + '</strong>. Pick something with fast sugar.</p>' +
+      '<p class="src-note">How much fast sugar is right for you depends on your age. Your diabetes team will tell you.</p>' +
       '<div class="mg-options-grid">' + options.map((o, i) =>
         '<div class="mg-option-card" data-idx="' + i + '"><span class="mg-opt-emoji">' + o.emoji + '</span><span class="mg-opt-name">' + o.name + '</span>' +
         (o.note ? '<span class="mg-opt-carbs">' + o.note + '</span>' : '') + '</div>').join('') + '</div>' +
@@ -2102,41 +2165,40 @@ MiniGames['Treat-the-Low'] = {
 // Canadian Nutrition Facts label. No timer. Wrong answers get a hint and another try.
 MiniGames['Label Reader'] = {
   intro: { emoji: '🏷️', how: [
-    'You\'ll see a Nutrition Facts table, like the ones on food in Canada.',
+    'You\'ll see the carbohydrate part of a Nutrition Facts table.',
     'Answer a few questions by reading the label.',
     'If an answer isn\'t right, you get a hint and can try again. No rush.'] },
   play: function(opts, onComplete) {
     const tier = opts.tier || 1;
+    // Health Canada, Nutrient Value of Some Common Foods (2008), rounded to whole grams like a label.
     const labels = [
-      { product: '🥣 Oatmeal packets', servingSize: '1 packet (43 g)', servingsPerPkg: 8, totalCarbs: 27, fibre: 3, sugar: 12, calories: 160 },
-      { product: '🧃 Apple juice', servingSize: '250 mL', servingsPerPkg: 4, totalCarbs: 28, fibre: 0, sugar: 24, calories: 110 },
-      { product: '🍪 Chocolate chip cookies', servingSize: '2 cookies (30 g)', servingsPerPkg: 10, totalCarbs: 22, fibre: 1, sugar: 11, calories: 140 },
-      { product: '🍘 Whole grain crackers', servingSize: '8 crackers (20 g)', servingsPerPkg: 12, totalCarbs: 14, fibre: 2, sugar: 1, calories: 90 },
-      { product: '🍬 Fruit snacks', servingSize: '1 pouch (22 g)', servingsPerPkg: 6, totalCarbs: 18, fibre: 0, sugar: 11, calories: 80 },
-      { product: '🥛 Chocolate milk', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 26, fibre: 0, sugar: 24, calories: 160 },
-      { product: '🍞 Whole wheat bread', servingSize: '1 slice (38 g)', servingsPerPkg: 20, totalCarbs: 18, fibre: 3, sugar: 2, calories: 90 },
-      { product: '🥫 Tomato soup', servingSize: '250 mL', servingsPerPkg: 2, totalCarbs: 20, fibre: 2, sugar: 12, calories: 100 },
-      { product: '🥣 Breakfast cereal', servingSize: '1 cup (30 g)', servingsPerPkg: 12, totalCarbs: 25, fibre: 3, sugar: 6, calories: 110 },
-      { product: '🫙 Plain yogurt', servingSize: '¾ cup (175 g)', servingsPerPkg: 4, totalCarbs: 12, fibre: 0, sugar: 10, calories: 120 }
+      { product: '🍞 Whole wheat bread', servingSize: '1 slice (35 g)', carbs: 16, fibre: 2 },
+      { product: '🥣 Cheerios cereal', servingSize: '250 mL (24 g)', carbs: 18, fibre: 2 },
+      { product: '🥣 Oatmeal, cooked', servingSize: '175 mL (173 g)', carbs: 17, fibre: 3 },
+      { product: '🍝 Spaghetti, cooked', servingSize: '250 mL (148 g)', carbs: 42, fibre: 3 },
+      { product: '🥣 Granola with raisins', servingSize: '125 mL (59 g)', carbs: 46, fibre: 4 },
+      { product: '🫘 Black beans, canned', servingSize: '175 mL (178 g)', carbs: 29, fibre: 12 },
+      { product: '🍘 Whole wheat crackers', servingSize: '4 crackers (16 g)', carbs: 11, fibre: 2 },
+      { product: '🫘 Chickpeas, canned', servingSize: '175 mL (178 g)', carbs: 40, fibre: 8 },
+      { product: '🧁 English muffin', servingSize: '1 muffin (52 g)', carbs: 26, fibre: 2 },
+      { product: '🫘 Hummus', servingSize: '60 mL (57 g)', carbs: 8, fibre: 3 }
     ];
     const L = pick(labels);
-    const whole = L.totalCarbs * L.servingsPerPkg;
-    const qs = [{ q: 'How many grams of carbohydrate are in one serving?', answer: L.totalCarbs, unit: 'g', hint: 'Find the line that says <strong>Carbohydrate / Glucides</strong>.', explain: 'Total carbohydrate is the number you use when counting carbs.' },
-                { q: 'How many servings are in the whole package?', answer: L.servingsPerPkg, unit: '', hint: 'Look near the top for <strong>servings per container</strong>.', explain: 'If you eat more than one serving, the carbs add up.' }];
-    if (tier >= 2) qs.push({ q: 'If you ate TWO servings, how many grams of carbs would that be?', answer: L.totalCarbs * 2, unit: 'g', hint: 'Take the carbs for one serving and add it twice.', explain: 'Two servings means double the carbs. A super common trap!' });
-    if (tier >= 2) qs.push({ q: 'How many grams of fibre are in one serving?', answer: L.fibre, unit: 'g', hint: 'Fibre is listed just under Carbohydrate.', explain: 'Fibre is part of the carbohydrate number. Ask your diabetes team how they want you to count it.' });
-    if (tier >= 3) qs.push({ q: 'How many grams of carbs are in the WHOLE package?', answer: whole, unit: 'g', hint: 'Carbs per serving × servings per container. (' + L.totalCarbs + ' × ' + L.servingsPerPkg + ')', explain: 'Big packages can hold a lot more than one serving.' });
-    if (tier >= 3) qs.push({ q: 'How many grams of sugars are in one serving?', answer: L.sugar, unit: 'g', hint: 'Sugars are listed under Carbohydrate too.', explain: 'Sugars are part of the total carbohydrate, not extra on top.' });
+    const qs = [
+      { q: 'How many grams of carbohydrate are in one serving?', answer: L.carbs, unit: 'g', hint: 'Find the line that says <strong>Carbohydrate / Glucides</strong>.', explain: 'That number is for one serving, the amount shown at the top.' },
+      { q: 'If you ate TWO servings, how many grams of carbohydrate is that?', answer: L.carbs * 2, unit: 'g', hint: 'Take the carbs for one serving and add it twice.', explain: 'Diabetes Canada says to check the serving size, because the numbers are only for that amount.' }
+    ];
+    if (tier >= 2) qs.push({ q: 'How many grams of fibre are in one serving?', answer: L.fibre, unit: 'g', hint: 'Fibre is listed just under Carbohydrate.', explain: 'Fibre is part of the carbohydrate number.' });
+    if (tier >= 2) qs.push({ q: 'Diabetes Canada says to subtract fibre from carbohydrate. What do you get for one serving?', answer: L.carbs - L.fibre, unit: 'g', hint: 'Carbohydrate minus fibre: ' + L.carbs + ' − ' + L.fibre + '.', explain: 'Fibre does not raise blood sugar, so Diabetes Canada says to subtract it.' });
+    if (tier >= 3) qs.push({ q: 'How many grams of carbohydrate are in THREE servings?', answer: L.carbs * 3, unit: 'g', hint: L.carbs + ' × 3.', explain: 'Bigger portions add up fast.' });
 
     let qi = 0, firstTry = 0;
     const labelHtml = '<div class="nf-label">' +
       '<div class="nf-title">Nutrition Facts</div><div class="nf-sub">Valeur nutritive</div>' +
-      '<div class="nf-line">Per ' + L.servingSize + ' / pour ' + L.servingSize + '</div>' +
-      '<div class="nf-line nf-thick">Servings per container / Portions par contenant <strong>' + L.servingsPerPkg + '</strong></div>' +
-      '<div class="nf-line nf-row"><strong>Calories ' + L.calories + '</strong></div>' +
-      '<div class="nf-line nf-row"><strong>Carbohydrate / Glucides</strong><span>' + L.totalCarbs + ' g</span></div>' +
-      '<div class="nf-line nf-row nf-indent">Fibre / Fibres<span>' + L.fibre + ' g</span></div>' +
-      '<div class="nf-line nf-row nf-indent">Sugars / Sucres<span>' + L.sugar + ' g</span></div></div>';
+      '<div class="nf-line nf-thick">Per ' + L.servingSize + '</div>' +
+      '<div class="nf-line nf-row"><strong>Carbohydrate / Glucides</strong><span>' + L.carbs + ' g</span></div>' +
+      '<div class="nf-line nf-row nf-indent">Fibre / Fibres<span>' + L.fibre + ' g</span></div></div>' +
+      '<p class="src-note">Values: Health Canada, Nutrient Value of Some Common Foods. A real label also lists calories, fat, sugars and more.</p>';
 
     renderMGPanel('<h2>🏷️ Label Reader</h2><p class="mg-subtitle">' + L.product + '</p>' + labelHtml + '<div id="mg-question"></div><div id="mg-result"></div>');
 
@@ -2148,7 +2210,7 @@ MiniGames['Label Reader'] = {
         '<div class="mg-estimate-row"><input type="number" id="mg-label-input" placeholder="0" min="0" max="9999"><span>' + qd.unit + '</span><button class="mg-action-btn" id="mg-label-submit">Answer</button></div>' +
         '<div id="mg-q-feedback"></div>';
       const input = document.getElementById('mg-label-input');
-      const next = () => { qi++; if (qi < qs.length) showQ(); else { box.innerHTML = ''; mgFinish('<p><strong>Label master!</strong> Serving size, servings, carbs: that\'s how you read a label.</p>', () => onComplete({ stars: firstTry === qs.length ? 3 : 2, summary: 'Label read' }), '🏷️'); } };
+      const next = () => { qi++; if (qi < qs.length) showQ(); else { box.innerHTML = ''; mgFinish('<p><strong>Label master!</strong> Serving size first, then carbohydrate, then fibre.</p>', () => onComplete({ stars: firstTry === qs.length ? 3 : 2, summary: 'Label read' }), '🏷️'); } };
       const submit = () => {
         const val = parseInt(input.value, 10);
         if (isNaN(val)) { input.focus(); return; }
@@ -2190,10 +2252,10 @@ MiniGames['Exercise Balance'] = {
   play: function(opts, onComplete) {
     const tier = opts.tier || 1;
     let bg = state.bg.current;
-    const TOTAL = 60, MS = 400, RISE = 1.6, DIGEST = 8;
+    const TOTAL = 60, MS = 400, RISE = 1.5, DIGEST = 10;
     const phases = [
       { until: 10, name: 'Warm-up', emoji: '🤸', rate: 0.04 },
-      { until: 45, name: 'Main activity', emoji: opts.activity || '⚽', rate: 0.07 + tier * 0.01 },
+      { until: 45, name: 'Main activity', emoji: opts.activity || '⚽', rate: 0.09 + tier * 0.015 },
       { until: 60, name: 'Cool-down', emoji: '🧘', rate: 0.03 }
     ];
     let minute = 0, digest = 0, snacks = 0, green = 0, timeouts = 0, paused = false, done = false;
@@ -2235,7 +2297,9 @@ MiniGames['Exercise Balance'] = {
         const ph = phases.find(p => minute < p.until) || phases[2];
         phaseEl.textContent = ph.emoji + ' ' + ph.name + ' · minute ' + minute + ' of ' + TOTAL;
         runner.textContent = ph.emoji === '🧘' ? '🚶' : '🏃';
-        bg -= ph.rate + Math.random() * 0.02;
+        let drop = ph.rate + Math.random() * 0.02;
+        if (ph.name === 'Main activity' && Math.random() < 0.12) { drop += 0.3; statusEl.textContent = pick(['💨 Sprint!', '💨 Big run down the field!', '💨 Racing for the ball!']); }
+        bg -= drop;
         if (digest > 0) { bg += RISE / DIGEST; digest--; if (digest === 0) statusEl.innerHTML = '&nbsp;'; }
         if (inRange(bg)) green++;
         minute++;
@@ -2262,7 +2326,7 @@ MiniGames['Exercise Balance'] = {
         else msg = '<p><strong>Great balance!</strong> You finished in the green zone at ' + bg.toFixed(1) + '.</p>';
         msg += '<p><small>Snacks: ' + snacks + ' · Time in the green zone: ' + Math.round(green / TOTAL * 100) + '%</small></p>';
         if (timeouts) msg += '<p><small>You also stopped to treat a low. That\'s exactly the right move.</small></p>';
-        msg += '<p><small>💡 Activity can keep lowering BG for hours afterwards, so keep an eye on it later too.</small></p>';
+        msg += '<p><small>💡 Diabetes Canada says long exercise can lower blood sugar for up to 48 hours afterwards.</small></p>';
         mgFinish(msg, () => {
           state.bg.current = bg;
           state.bg.trend = 'stable';
@@ -2287,7 +2351,7 @@ MiniGames['Pack Your Bag'] = {
       { emoji: '🩸', name: isCGM ? 'Phone or receiver for your CGM' : 'Meter + test strips', essential: true, hint: 'How will you check your BG?' },
       { emoji: '🍬', name: 'Glucose tabs', essential: true, hint: 'What will you use if you go low?' },
       { emoji: '🥪', name: 'Snacks', essential: true, hint: 'You might get hungry, or need a snack after a low.' },
-      { emoji: '💧', name: 'Water bottle', essential: true, hint: 'Something to drink, especially if BG runs high.' },
+      { emoji: '💧', name: 'Water bottle', essential: true, hint: 'Canada\'s Food Guide says water is the drink of choice.' },
       { emoji: '🪪', name: 'Medical ID', essential: true, hint: 'Something that tells people you have T1D if you can\'t.' },
       { emoji: '🧃', name: 'Juice box', essential: false },
       { emoji: '🔋', name: 'Charger / spare batteries', essential: false },
@@ -2348,7 +2412,7 @@ MiniGames['Glucose Roller'] = {
     'This is a pretend game about how BG moves. The ball is your BG.',
     'The ball drifts on its own, and once it starts moving it keeps going that way.',
     'Tap <strong>⬆️ Up</strong> (like eating carbs) or <strong>⬇️ Down</strong> (like insulin working) to nudge it. Arrow keys work too.',
-    'Try to keep it in the green band (5 to 10). Small, early nudges work best. It lasts about 15 seconds.'] },
+    'Try to keep it in the green band (5 to 10). It lasts about 15 seconds.'] },
   play: function(opts, onComplete) {
     let bg = 7.0, vel = 0, inGreen = 0, ticks = 0, done = false;
     const MAX = 300, H = 280;
@@ -2386,7 +2450,7 @@ MiniGames['Glucose Roller'] = {
           done = true; clearInterval(loop); document.removeEventListener('keydown', keys);
           const p = Math.round(inGreen / ticks * 100);
           mgFinish('<p><strong>' + (p >= 70 ? 'Smooth rolling!' : p >= 40 ? 'Nice work!' : 'That ball has a mind of its own!') + '</strong> The ball was in the green ' + p + '% of the time.</p>' +
-            '<p><small>💡 BG has momentum. Small, early nudges work better than big, late ones. Real BG works a bit like that too.</small></p>',
+            '<p><small>💡 In this game, small early nudges work better than big late ones.</small></p>',
             () => onComplete({ stars: p >= 70 ? 3 : p >= 40 ? 2 : 1, summary: p + '%' }), '🎱');
         }
       }, 50);
@@ -2398,27 +2462,28 @@ MiniGames['Glucose Roller'] = {
 MiniGames['Portion Estimator'] = {
   intro: { emoji: '👁️', how: [
     'You\'ll see a plate of food. Slide to estimate the total carbs.',
-    'Use your hand as a guide: a fist is about 1 cup.',
+    'Diabetes Canada\'s Handy Portion Guide can help: a fist-sized amount of grains, starches or fruit.',
     'No timer, and close is great.'] },
   play: function(opts, onComplete) {
+    // Health Canada values (2008). Meat and most vegetables: "little carbohydrate" (Diabetes Canada).
     const plates = [
-      { items: [['🍚', 'About 1½ cups of rice', 67], ['🍗', 'Chicken thigh', 0], ['🥦', 'Veggies', 8]], hint: 'A fist is about 1 cup. That rice is about 1½ fists.' },
-      { items: [['🍝', 'Big bowl of pasta', 60], ['🧀', 'Parmesan', 1], ['🥗', 'Side salad', 5]], hint: 'A big bowl of pasta is often 1½ cups or more.' },
-      { items: [['🥞', '3 pancakes', 45], ['🍯', 'Syrup', 15], ['🍓', 'Strawberries', 6]], hint: 'Each pancake is about 15g. Syrup adds fast sugar.' },
-      { items: [['🍕', '2 slices of pizza', 60], ['🥛', 'Glass of milk', 12]], hint: 'Each slice is about 30g.' },
-      { items: [['🌮', '3 soft tacos', 45], ['🫘', 'Refried beans', 20], ['🧀', 'Cheese', 1]], hint: 'Each small flour tortilla is about 15g.' },
-      { items: [['🥣', 'Bowl of cereal', 35], ['🥛', 'Milk', 13], ['🍌', 'Banana', 27]], hint: 'Cereal, milk and fruit all add up.' },
-      { items: [['🍔', 'Burger with bun', 35], ['🍟', 'Medium fries', 44], ['💧', 'Water', 0]], hint: 'The bun and fries are where the carbs are.' },
-      { items: [['🥪', 'Sandwich', 35], ['🍎', 'Apple', 19], ['🥛', 'Milk', 13]], hint: 'Two slices of bread are about 30g.' },
-      { items: [['🍛', 'Curry', 10], ['🍚', '1 cup rice', 45], ['🫓', 'Small naan', 25]], hint: 'Rice and bread together add up fast.' },
-      { items: [['🥟', '6 dumplings', 30], ['🥢', 'Small bowl of noodles', 30], ['🥦', 'Bok choy', 3]], hint: 'Dumpling wrappers and noodles are both dough.' }
+      { items: [['🍚', '1½ cups rice', 72], ['🍗', 'Chicken', 0], ['🥦', '½ cup broccoli', 6]], hint: '½ cup of cooked rice has 24 g, so 1½ cups has 72 g.' },
+      { items: [['🍝', '1½ cups spaghetti', 63], ['🧀', 'Cheese', 1], ['🥗', 'Salad', 0]], hint: '1 cup of cooked spaghetti has 42 g.' },
+      { items: [['🥞', '3 pancakes', 33], ['🍁', '2 tbsp maple syrup', 28], ['🍓', '7 strawberries', 6]], hint: 'Each pancake has about 11 g. Maple syrup has 14 g per tablespoon.' },
+      { items: [['🍕', '2 slices of pizza', 50], ['🥛', '1 cup milk', 12]], hint: 'Each slice of cheese pizza has about 25 g.' },
+      { items: [['🌮', '3 corn tortillas', 24], ['🫘', '¾ cup refried beans', 29], ['🧀', 'Cheese', 1]], hint: 'Each corn tortilla has about 8 g. Beans have a lot.' },
+      { items: [['🥣', '1 cup corn flakes', 23], ['🥛', '1 cup milk', 12], ['🍌', 'Banana', 27]], hint: 'Cereal, milk and fruit all add up.' },
+      { items: [['🍔', 'Burger on a bun', 21], ['🍟', '20 to 25 fries', 29], ['💧', 'Water', 0]], hint: 'The bun and fries are where the carbs are.' },
+      { items: [['🥪', 'Sandwich (2 slices whole wheat)', 32], ['🍎', 'Apple', 19], ['🥛', '1 cup milk', 12]], hint: 'One slice of whole wheat bread has about 16 g.' },
+      { items: [['🍛', 'Chicken curry', 0], ['🍚', '1 cup rice', 48], ['🫓', 'Half a naan', 36]], hint: 'Rice and bread together add up fast.' },
+      { items: [['🥟', '6 dumplings', 48], ['🍜', '1 cup rice noodles', 46], ['🥦', '½ cup broccoli', 6]], hint: 'Each dumpling has about 8 g, and noodles have a lot.' }
     ];
     const pl = pick(plates);
     const total = pl.items.reduce((a, it) => a + it[2], 0);
     renderMGPanel('<h2>👁️ Portion Estimator</h2><p class="mg-subtitle">Estimate the total carbs on this plate.</p>' +
       '<div class="plate big">' + pl.items.map(it => '<div class="plate-item"><span>' + it[0] + '</span><small>' + it[1] + '</small></div>').join('') + '</div>' +
-      '<p class="hand-ref">✊ fist ≈ 1 cup · ✋ palm ≈ a serving of meat · 👍 thumb ≈ 1 tbsp</p>' +
-      '<div class="mg-slider-row"><label for="mg-portion-slider">Estimate:</label><input type="range" id="mg-portion-slider" min="0" max="150" step="5" value="50"><span class="mg-slider-value" id="mg-portion-val">50g</span></div>' +
+      '<p class="hand-ref">Handy Portion Guide: ✊ fist = grains, starches, fruit · 🙌 both hands = veggies · ✋ palm = meat · 👍 thumb tip = fat</p>' +
+      '<div class="mg-slider-row"><label for="mg-portion-slider">Estimate:</label><input type="range" id="mg-portion-slider" min="0" max="150" step="5" value="0"><span class="mg-slider-value" id="mg-portion-val">0g</span></div>' +
       '<div style="text-align:center;margin-top:12px;"><button class="mg-action-btn" id="mg-portion-submit">Check</button></div><div id="mg-result"></div>');
     setTimeout(() => {
       const sl = document.getElementById('mg-portion-slider'), val = document.getElementById('mg-portion-val');
@@ -2443,40 +2508,41 @@ MiniGames['Sick Day Protocol'] = {
     'Pick an answer. If it\'s not the best one, Pip explains and you can pick again.',
     'Your diabetes team gives you a sick day plan. This game is about the big ideas.'] },
   play: function(opts, onComplete) {
+    // Diabetes Canada CPG ch. 9, 15, 34 and the Type 1 page (DKA signs).
     const steps = [
       { art: '🤒 🛏️', situation: 'You wake up with a fever and an upset stomach. Your BG is 16.5.', q: 'What\'s a good first step?',
         choices: [
-          { text: '🙋 Tell a grown-up and check for ketones', correct: true, feedback: 'Yes. Being sick plus a high BG means it\'s time to check ketones, with a grown-up helping.' },
-          { text: '😴 Go back to sleep and check later', correct: false, feedback: 'Being sick can make BG and ketones go up fast. It needs attention now.' },
-          { text: '🙈 Don\'t tell anyone', correct: false, feedback: 'Sick days are a team job. Tell a grown-up so they can help.' }
+          { text: '🙋 Tell a grown-up and check for ketones', correct: true, feedback: 'Yes. Diabetes Canada says to check ketones when you\'re sick with high blood sugar.' },
+          { text: '😴 Go back to sleep and check later', correct: false, feedback: 'When you\'re sick, blood sugar can change in ways that are hard to predict. It needs attention now.' },
+          { text: '🙈 Don\'t tell anyone', correct: false, feedback: 'Sick days are a team job. Tell a grown-up.' }
         ] },
       { art: '🧪 ⚠️', situation: 'Ketone check: <strong>moderate</strong>.', q: 'What now?',
         choices: [
-          { text: '📋 Follow the sick day plan from my diabetes team, and drink water', correct: true, feedback: 'Right. Your sick day plan tells you and your grown-up what to do about insulin. Sipping water helps too.' },
-          { text: '🍕 Eat a big meal to feel better', correct: false, feedback: 'Your stomach and your BG need gentle care right now. Follow your sick day plan.' },
-          { text: '⏰ Ignore it for a few hours', correct: false, feedback: 'Ketones need action. Follow your sick day plan now.' }
+          { text: '📋 Follow the sick-day plan from my diabetes team', correct: true, feedback: 'Right. Diabetes Canada says to make a sick-day plan with your diabetes team ahead of time.' },
+          { text: '🍕 Eat a big meal', correct: false, feedback: 'Your sick-day plan is the place to start.' },
+          { text: '⏰ Ignore it for a few hours', correct: false, feedback: 'Ketones need attention. Follow your sick-day plan now.' }
         ] },
-      { art: '⏱️ 🩸 🧪', situation: 'A couple of hours have passed.', q: 'What do you check?',
+      { art: '⏱️ 🩸', situation: 'You\'re still sick.', q: 'How often should you check your blood sugar?',
         choices: [
-          { text: '🩸🧪 BG and ketones both', correct: true, feedback: 'Yes. On sick days you keep an eye on both, more often than usual.' },
-          { text: '🩸 Just BG', correct: false, feedback: 'BG matters, but ketones are important on sick days too. Check both.' },
-          { text: '🤷 Nothing, you feel a bit better', correct: false, feedback: 'Keep checking on sick days. Things can change quickly.' }
+          { text: '🩸 More often than usual, like every 2 to 4 hours', correct: true, feedback: 'Yes. That\'s Diabetes Canada\'s sick-day advice.' },
+          { text: '📅 Once tomorrow', correct: false, feedback: 'On sick days, check more often than usual: every 2 to 4 hours.' },
+          { text: '🤷 Only if you feel worse', correct: false, feedback: 'Check more often than usual, even if you feel okay.' }
         ] },
-      { art: '🥣 🧃', situation: 'You don\'t feel like eating.', q: 'What helps?',
+      { art: '💧 🥤', situation: 'You\'re thirsty.', q: 'What should you drink?',
         choices: [
-          { text: '🥣 Small sips and easy foods, if you can', correct: true, feedback: 'Yes. Your body still needs fluids and some carbs. Your sick day plan may list easy options.' },
-          { text: '🚫 Nothing at all until tomorrow', correct: false, feedback: 'Going without fluids can make things worse. Small sips help a lot.' },
-          { text: '🍬 Candy only', correct: false, feedback: 'Candy alone won\'t help you get better. Fluids and gentle foods are better.' }
+          { text: '💧 Plenty of water or sugar-free fluids', correct: true, feedback: 'Yes. That\'s straight from Diabetes Canada\'s sick-day advice.' },
+          { text: '🥤 Nothing until tomorrow', correct: false, feedback: 'Diabetes Canada says to drink plenty of water or sugar-free fluids.' },
+          { text: '☕ Only coffee', correct: false, feedback: 'Water or sugar-free fluids are the best pick.' }
         ] },
-      { art: '📞 🏥', situation: 'Knowing when to get help is the most important part.', q: 'Which one means call your diabetes team or get medical help?',
+      { art: '📞 🏥', situation: 'Knowing when to get help is the most important part.', q: 'Which of these are DKA warning signs that mean get medical help right away?',
         choices: [
-          { text: '🚨 Throwing up and can\'t keep fluids down, or ketones staying high', correct: true, feedback: 'Exactly. Those are signs to get help right away. Your grown-up makes the call.' },
-          { text: '🤧 A runny nose', correct: false, feedback: 'A runny nose alone isn\'t an emergency. Watch for throwing up, high ketones, or feeling very unwell.' },
-          { text: '😴 Feeling sleepy', correct: false, feedback: 'Being sleepy when sick is normal. Watch for throwing up, high ketones, or trouble breathing.' }
+          { text: '🚨 Very thirsty, very weak, throwing up, stomach pain, short of breath', correct: true, feedback: 'Exactly. Diabetes Canada says if you think it might be DKA, get medical help immediately.' },
+          { text: '🤧 A runny nose', correct: false, feedback: 'That\'s not on the list of DKA warning signs.' },
+          { text: '😴 Feeling a bit sleepy', correct: false, feedback: 'The DKA warning signs are being very thirsty, very weak, peeing a lot, throwing up, stomach pain, or shortness of breath.' }
         ] }
     ];
     runSteps('🤒 Sick Day Protocol', 'Pick an answer. You can change it any time.', steps,
-      '<p><strong>You know the big ideas!</strong> Tell a grown-up, check BG and ketones, follow your sick day plan, sip fluids, and know when to get help.</p>',
+      '<p><strong>You know the big ideas!</strong> Tell a grown-up, check BG and ketones more often, follow your sick-day plan, drink water, and know the DKA warning signs.</p>',
       onComplete);
   }
 };
@@ -2536,26 +2602,26 @@ function registerMiniGamePassage(day, slot, nextPassage) {
 // since many Canadian schools are nut-free.
 
 const SNACKS = [
-  { emoji: '🍎🧀', name: 'Apple slices + cheese stick', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🥕🫘', name: 'Veggie sticks + hummus', carbs: 8, speed: 'slow', tag: 'mostly veggies' },
-  { emoji: '🥛', name: 'Glass of milk', carbs: 12, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🍌', name: 'Half a banana', carbs: 15, speed: 'fast', tag: 'fruit' },
+  // Health Canada values (2008); meat, cheese and most vegetables have little carbohydrate.
+  { emoji: '🍎🧀', name: 'Apple + cheese', carbs: 20, speed: 'slow', tag: 'fruit + protein' },
+  { emoji: '🥕🫘', name: 'Carrots + hummus', carbs: 14, speed: 'slow', tag: 'veggies' },
+  { emoji: '🥛', name: 'Glass of milk', carbs: 12, speed: 'slow', tag: 'milk' },
+  { emoji: '🍌', name: 'Banana', carbs: 27, speed: 'fast', tag: 'fruit' },
   { emoji: '🍊', name: 'Orange', carbs: 15, speed: 'fast', tag: 'fruit' },
-  { emoji: '🍇', name: 'Small bunch of grapes', carbs: 15, speed: 'fast', tag: 'fruit' },
-  { emoji: '🥣🍓', name: 'Plain yogurt + berries', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🍿', name: 'Air-popped popcorn (3 cups)', carbs: 15, speed: 'slow', tag: 'whole grain' },
-  { emoji: '🍘🧀', name: 'Whole grain crackers + cheese', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🥪', name: 'Half a turkey sandwich', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
+  { emoji: '🍇', name: '20 grapes', carbs: 18, speed: 'fast', tag: 'fruit' },
+  { emoji: '🥣🍓', name: 'Plain yogurt + strawberries', carbs: 19, speed: 'slow', tag: 'milk + fruit' },
+  { emoji: '🍿', name: 'Air-popped popcorn (3 cups)', carbs: 21, speed: 'slow', tag: 'whole grain' },
+  { emoji: '🍘🧀', name: '4 whole wheat crackers + cheese', carbs: 12, speed: 'slow', tag: 'whole grain + protein' },
+  { emoji: '🥪', name: 'Half a turkey sandwich', carbs: 16, speed: 'slow', tag: 'whole grain + protein' },
   { emoji: '🫛', name: 'Edamame', carbs: 8, speed: 'slow', tag: 'protein' },
-  { emoji: '🥚🍞', name: 'Hard-boiled egg + half slice of toast', carbs: 8, speed: 'slow', tag: 'protein' },
-  { emoji: '🥒🧀', name: 'Cucumber + cheese cubes', carbs: 3, speed: 'slow', tag: 'low carb' },
-  { emoji: '🍑🥣', name: 'Cottage cheese + peaches', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🌯', name: 'Small tortilla roll-up with turkey', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🍘🌻', name: 'Rice cake + sunflower seed butter', carbs: 15, speed: 'slow', tag: 'carbs + protein' },
-  { emoji: '🧁', name: 'Mini muffin', carbs: 15, speed: 'fast', tag: 'treat' },
-  { emoji: '🍪🥛', name: 'Two small cookies + milk', carbs: 30, speed: 'fast', tag: 'treat' },
-  { emoji: '🥜', name: 'Handful of almonds', carbs: 5, speed: 'slow', tag: 'low carb', notAtSchool: true },
-  { emoji: '🍎🥜', name: 'Apple + peanut butter', carbs: 20, speed: 'slow', tag: 'carbs + protein', notAtSchool: true }
+  { emoji: '🥚🍘', name: 'Hard-boiled egg + rice cake', carbs: 8, speed: 'slow', tag: 'protein' },
+  { emoji: '🍑🥣', name: 'Cottage cheese + canned peaches', carbs: 18, speed: 'slow', tag: 'milk + fruit' },
+  { emoji: '🍎', name: 'Unsweetened applesauce', carbs: 15, speed: 'fast', tag: 'fruit' },
+  { emoji: '🫐', name: 'Blueberries', carbs: 11, speed: 'fast', tag: 'fruit' },
+  { emoji: '🧁', name: 'Fruit muffin', carbs: 23, speed: 'fast', tag: 'treat' },
+  { emoji: '🍪🥛', name: 'Two cookies + milk', carbs: 25, speed: 'fast', tag: 'treat' },
+  { emoji: '🥜', name: 'Almonds (¼ cup)', carbs: 7, speed: 'slow', tag: 'protein', notAtSchool: true },
+  { emoji: '🍎🥜', name: 'Apple + peanut butter', carbs: 25, speed: 'slow', tag: 'fruit + protein', notAtSchool: true }
 ];
 
 function snackChoices(day, n) {
@@ -2566,7 +2632,7 @@ function snackChoices(day, n) {
 function snackAdvice(bg) {
   if (bg > 10) return 'You\'re running a bit high. A lower-carb snack could be a good pick.';
   if (bg < 5) return 'You\'re on the low side. A snack with some carbs is a good idea.';
-  return pick(['Anything works. Carbs plus protein keeps you steady longest.', 'Pick whatever sounds good.', 'Snack time!']);
+  return pick(['Pick whatever sounds good.', 'Snack time!', 'What sounds good?']);
 }
 
 function registerSnackPassage(day, slot, nextPassage) {
@@ -2615,13 +2681,18 @@ function getDayTier(day) {
 function choosePicks(day) {
   const tier = getDayTier(day);
   const seen = state.narrative.eventsCompleted;
-  const meals = pickFromPool(mealPool, tier, 3, seen, day);
+  const sick = day === 5;
+  const meals = [
+    pickMeal('breakfast', tier, seen, day),
+    pickMeal(sick ? 'sick-lunch' : 'lunch', tier, seen, day),
+    pickMeal(sick ? 'sick-dinner' : 'dinner', tier, seen, day)
+  ];
   const social = pickFromPool(socialPool, tier, 1, seen, day)[0];
   const emotional = pickFromPool(emotionalPool, tier, 1, seen, day)[0];
   const practical = pickFromPool(practicalPool, tier, 1, seen, day)[0];
   const picks = {
     day,
-    meals: meals.map(e => e.id),
+    meals: meals.map(e => e ? e.id : null),
     social: social ? social.id : null,
     emotional: emotional ? emotional.id : null,
     practical: practical ? practical.id : null,
@@ -2633,7 +2704,7 @@ function choosePicks(day) {
 
 function buildDay(day, picks) {
   const find = (pool, id) => pool.find(e => e.id === id);
-  const meals = picks.meals.map(id => find(mealPool, id)).filter(Boolean);
+  const meals = picks.meals.map(id => find(mealPool, id));
   const socialEvent = find(socialPool, picks.social);
   const emotionalEvent = find(emotionalPool, picks.emotional);
   const practicalEvent = find(practicalPool, picks.practical);
@@ -2737,12 +2808,12 @@ function registerWakeup(day, nextPassage) {
 }
 
 const BEDTIME_SNACKS = [
-  { emoji: '🍘🧀', name: 'Crackers with cheese', carbs: 15 },
+  { emoji: '🍘🧀', name: 'Crackers with cheese', carbs: 12 },
   { emoji: '🥛', name: 'Glass of milk', carbs: 12 },
-  { emoji: '🍞🌻', name: 'Toast with seed butter', carbs: 15 },
-  { emoji: '🥣🍓', name: 'Yogurt with berries', carbs: 15 },
-  { emoji: '🍎🧀', name: 'Apple slices and cheese', carbs: 15 },
-  { emoji: '🥒', name: 'Cucumber slices (a light pick)', carbs: 3 }
+  { emoji: '🍞🧀', name: 'Whole wheat toast + cheese', carbs: 17 },
+  { emoji: '🥣🍓', name: 'Yogurt with strawberries', carbs: 19 },
+  { emoji: '🍎🧀', name: 'Apple and cheese', carbs: 20 },
+  { emoji: '🥒', name: 'Cucumber slices', carbs: 1 }
 ];
 
 function registerBedtime(day, nextId) {
@@ -2750,7 +2821,7 @@ function registerBedtime(day, nextId) {
   addPassage('d' + day + '-bedtime', {
     content: (s) => sceneArt('🌙', ['🛏️ 🧸 ' + options.map(o => o.emoji).join(' ')], 'night') +
       '<h2>Bedtime Snack</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>. ' +
-      (s.bg.current > 10 ? 'You\'re a bit high, so a light snack makes sense.' : 'A snack with some carbs and protein can help keep things steady overnight.') + '</p>',
+      (s.bg.current > 10 ? 'You\'re a bit high, so a light snack might make sense.' : 'Bedtime snack time.') + '</p>',
     onEnter: () => { setClock(21.0); },
     choices: options.map(o => ({
       text: o.emoji + ' ' + o.name + ' <span class="carb-tag">~' + o.carbs + 'g</span>',
@@ -2842,18 +2913,18 @@ function registerScriptedDinner_Day3(day, nextPassage) {
   addPassage(p, {
     content: (s) => sceneArt('🥢 🍜 🥦 🍗', ['🏠 🍽️'], 'evening') +
       '<h2>Count It Yourself</h2>' +
-      '<p class="passage-scene">Chicken stir-fry with noodles and vegetables. No label.</p>' +
+      '<p class="passage-scene">Chicken stir-fry with about 1 cup of egg noodles and ½ cup of broccoli. No label.</p>' +
       '<p><strong>' + s.companion.name + ':</strong> "This one\'s all you. About how many carbs?"</p>' +
-      '<p><small>The noodles look like about one fist-sized cup.</small></p>',
+      '<p><small>Hint: 1 cup of spaghetti has 42 g. Egg noodles are about the same.</small></p>',
     onEnter: () => { setClock(18.0); },
     quiz: () => ({
       options: [
-        { text: '🍜 About 15g', correct: false, feedback: 'That\'s a bit low. A cup of noodles has quite a lot of carbs.' },
-        { text: '🍜 About 45g', correct: true, feedback: 'Nice estimate! About 40g in the noodles and a few in the sauce and veggies.' },
-        { text: '🍜 About 90g', correct: false, feedback: 'That\'s a lot higher than this plate. One cup of noodles is closer to 40g.' }
+        { text: '🍜 About 15g', correct: false, feedback: 'That\'s a bit low. A cup of noodles has a lot more.' },
+        { text: '🍜 About 50g', correct: true, feedback: 'Nice estimate! 1 cup of egg noodles is 42 g, plus about 6 g in the broccoli.' },
+        { text: '🍜 About 90g', correct: false, feedback: 'That\'s about two plates. One cup of egg noodles is 42 g.' }
       ],
       continueText: '🍽️ Eat dinner',
-      onDone: (s) => { eatMeal(45, 'slow'); tick(0.5); advanceTime(0.5); if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification(betaCellMap['estimating-carbs'].name, 'green'), 500); },
+      onDone: (s) => { eatMeal(48, 'slow'); tick(0.5); advanceTime(0.5); if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification(betaCellMap['estimating-carbs'].name, 'green'), 500); },
       next: nextPassage
     })
   });
@@ -2937,9 +3008,9 @@ function registerScriptedMorning_Day7(day, nextSnack) {
       '<p><strong>' + s.companion.name + ':</strong> "Biking plus no regular mealtimes. Let\'s start with a good breakfast."</p>',
     onEnter: () => { advanceTime(0.5); showCompanion('Big day out!'); },
     choices: [
-      { text: '🥣 Oatmeal with berries <span class="carb-tag">~30g · slow</span>', onSelect: () => { eatMeal(30, 'slow'); }, next: p + '-pack' },
-      { text: '🍞 Toast with seed butter <span class="carb-tag">~25g</span>', onSelect: () => { eatMeal(25, 'slow'); }, next: p + '-pack' },
-      { text: '🥞 Pancakes with syrup <span class="carb-tag">~50g · fast</span>', onSelect: () => { eatMeal(50, 'fast'); }, next: p + '-pack' }
+      { text: '🥣 Oatmeal with blueberries <span class="carb-tag">~28g</span>', onSelect: () => { eatMeal(28, 'slow'); }, next: p + '-pack' },
+      { text: '🍞 2 slices whole wheat toast + cheese <span class="carb-tag">~33g</span>', onSelect: () => { eatMeal(33, 'slow'); }, next: p + '-pack' },
+      { text: '🥞 3 pancakes + 2 tbsp maple syrup <span class="carb-tag">~61g</span>', onSelect: () => { eatMeal(61, 'fast'); }, next: p + '-pack' }
     ]
   });
   addPassage(p + '-pack', {
@@ -2947,7 +3018,7 @@ function registerScriptedMorning_Day7(day, nextSnack) {
     onEnter: () => { tick(0.5); advanceTime(0.5); },
     quiz: () => ({
       options: [
-        { text: '🎒 Insulin supplies, BG checker, glucose tabs, snacks, water, medical ID', correct: true, feedback: 'Perfect. Biking can lower BG, so fast sugar and snacks are a must.' },
+        { text: '🎒 Insulin supplies, BG checker, glucose tabs, snacks, water, medical ID', correct: true, feedback: 'Perfect. Diabetes Canada says to carry fast sugar at all times.' },
         { text: '🍬 Just glucose tabs', correct: false, feedback: 'Tabs are great, but you\'ll also want snacks, water, and a way to check your BG.' },
         { text: '📱 Just your phone', correct: false, feedback: 'A long day out needs your diabetes supplies too.' }
       ],
@@ -2965,12 +3036,12 @@ function registerScriptedMorning_Day2(day, nextSnack) {
   addPassage(p, {
     content: (s) => sceneArt('🥣 🍌 🥛', ['🏠 🌅'], 'morning') +
       '<h2>Breakfast, On Your Own</h2>' +
-      '<p class="passage-scene">Cereal, milk and a banana. About 40g of carbs.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Some diabetes teams suggest taking mealtime insulin a little <em>before</em> eating, so it\'s already working when the food arrives. Ask yours what timing is right for you. What\'s your plan today?"</p>',
+      '<p class="passage-scene">Corn flakes with milk, and an orange. 1 cup corn flakes (23 g) + 1 cup milk (12 g) + an orange (15 g) = 50 g.</p>' +
+      '<p><strong>' + s.companion.name + ':</strong> "Rapid-acting mealtime insulin is usually taken 0 to 15 minutes before eating. Your diabetes team tells you what timing is right for you. What\'s your plan today?"</p>',
     onEnter: () => { showCompanion('Your call.'); },
     choices: [
-      { text: '⏱️ Insulin a few minutes before eating (if that\'s in my plan)', onSelect: () => { eatMeal(40, 'fast', true); updateConfidence(4); if (collectBetaCell('pre-bolusing')) setTimeout(() => showBetaCellNotification(betaCellMap['pre-bolusing'].name, 'green'), 500); }, next: p + '-done' },
-      { text: '🍽️ Insulin when I start eating', onSelect: () => { eatMeal(40, 'fast'); updateConfidence(4); }, next: p + '-done' }
+      { text: '⏱️ Insulin a few minutes before eating (if that\'s in my plan)', onSelect: () => { eatMeal(50, 'fast', true); updateConfidence(4); if (collectBetaCell('pre-bolusing')) setTimeout(() => showBetaCellNotification(betaCellMap['pre-bolusing'].name, 'green'), 500); }, next: p + '-done' },
+      { text: '🍽️ Insulin when I start eating', onSelect: () => { eatMeal(50, 'fast'); updateConfidence(4); }, next: p + '-done' }
     ]
   });
   addPassage(p + '-done', {
@@ -2989,11 +3060,11 @@ function registerScriptedExercise_Day4(day, nextPassage) {
     content: (s) => sceneArt('⚽ 🥅', ['🧒👟 🧒👟 🧒👟'], 'day') +
       '<h2>Soccer Practice</h2>' +
       '<p class="passage-scene">After school. You\'re tying your cleats. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Exercise lowers BG, during practice and sometimes for hours after. What do you do before you start?"</p>',
+      '<p><strong>' + s.companion.name + ':</strong> "Exercise can lower BG, during practice and for hours after. What do you do before you start?"</p>',
     onEnter: (s) => { setClock(15.5); if (s.bg.current > 10) { s.bg.current = 8.4; notify(); } },
     quiz: () => ({
       options: [
-        { text: '🎒 Check BG and keep glucose tabs and a snack in my bag', correct: true, feedback: 'Yes. Knowing your BG and having fast sugar close by is the most important prep. Your diabetes team can help you make an exercise plan.' },
+        { text: '🎒 Check BG and keep glucose tabs and a snack in my bag', correct: true, feedback: 'Yes. Diabetes Canada says to carry fast sugar at all times. Your diabetes team can help you make an exercise plan.' },
         { text: '🤷 Nothing, just play', correct: false, feedback: 'Exercise can drop BG fast. Have fast sugar nearby, just in case.' },
         { text: '🙈 Leave my supplies in the locker room', correct: false, feedback: 'If you go low on the field, you\'ll want your supplies close by.' }
       ],
@@ -3004,7 +3075,7 @@ function registerScriptedExercise_Day4(day, nextPassage) {
   addPassage(p + '-after', {
     content: (s) => sceneArt('🏁', ['😅 💧 🎒'], 'evening') + '<h2>After Practice</h2>' +
       '<p class="passage-scene">You cool down and grab your bag. BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>' +
-      '<p><strong>' + s.companion.name + ':</strong> "Your muscles keep using sugar for a while after practice. Keep an eye on it this evening."</p>',
+      '<p><strong>' + s.companion.name + ':</strong> "Diabetes Canada says long exercise can lower blood sugar for up to 48 hours afterwards. Keep an eye on it tonight."</p>',
     onEnter: () => { if (collectBetaCell('exercise-emergencies')) setTimeout(() => showBetaCellNotification(betaCellMap['exercise-emergencies'].name, 'red'), 800); },
     next: nextPassage, continueText: '🏠 Head home'
   });
@@ -3021,17 +3092,17 @@ function registerScriptedMorning_Day6(day, nextSnack) {
       '<p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '.</p>',
     onEnter: (s) => { s.time.hour = 10.0; notify(); },
     choices: [
-      { text: '🧇 Two waffles with syrup + bacon <span class="carb-tag">~55g · fast</span>', onSelect: (s) => { eatMeal(55, 'fast'); s.narrative.choices['d6-brunch'] = 'waffles'; }, next: p + '-done' },
-      { text: '🍳 Eggs + one waffle + fruit <span class="carb-tag">~30g</span>', onSelect: (s) => { eatMeal(30, 'slow'); s.narrative.choices['d6-brunch'] = 'balanced'; }, next: p + '-done' },
-      { text: '🥣 Yogurt parfait with granola <span class="carb-tag">~35g</span>', onSelect: (s) => { eatMeal(35, 'slow'); s.narrative.choices['d6-brunch'] = 'parfait'; }, next: p + '-done' }
+      { text: '🧇 Two waffles + 2 tbsp maple syrup <span class="carb-tag">~56g</span>', onSelect: (s) => { eatMeal(56, 'fast'); s.narrative.choices['d6-brunch'] = 'waffles'; }, next: p + '-done' },
+      { text: '🍳 Eggs + one waffle + strawberries <span class="carb-tag">~22g</span>', onSelect: (s) => { eatMeal(22, 'slow'); s.narrative.choices['d6-brunch'] = 'balanced'; }, next: p + '-done' },
+      { text: '🥣 Yogurt + ¼ cup granola + blueberries <span class="carb-tag">~47g</span>', onSelect: (s) => { eatMeal(47, 'slow'); s.narrative.choices['d6-brunch'] = 'parfait'; }, next: p + '-done' }
     ]
   });
   addPassage(p + '-done', {
     content: (s) => {
       const k = s.narrative.choices['d6-brunch'];
-      const note = k === 'waffles' ? 'Syrup is fast sugar, so expect your BG to go up for a bit before it settles.'
+      const note = k === 'waffles' ? 'Maple syrup has 14 g of carbs per tablespoon. It adds up.'
         : k === 'balanced' ? 'Eggs and fruit with the waffle. Nice mix.'
-        : 'Granola has more carbs than people think. Good thing you counted it.';
+        : 'Half a cup of granola has 46 g of carbs, so a quarter cup is about 23 g. Good thing you counted it.';
       return '<p><strong>' + s.companion.name + ':</strong> "' + note + '"</p><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>.</p>';
     },
     onEnter: () => { advanceTime(0.75); tick(0.75); },
@@ -3282,14 +3353,14 @@ function registerSetupPassages() {
 
 function registerDay1Passages() {
   const D1_BREAKFAST = [
-    { name: 'Cereal with milk', carbs: 45, speed: 'fast', desc: 'A big bowl.' },
-    { name: 'Toast with seed butter', carbs: 30, speed: 'slow', desc: 'Two slices of whole wheat.' },
-    { name: 'Scrambled eggs on toast', carbs: 15, speed: 'slow', desc: 'One slice of toast with eggs.' }
+    { name: 'Cereal with milk', carbs: 48, speed: 'fast', desc: '2 cups Cheerios (36 g) + 1 cup milk (12 g).' },
+    { name: 'Toast with peanut butter', carbs: 38, speed: 'slow', desc: '2 slices whole wheat (32 g) + peanut butter (6 g).' },
+    { name: 'Scrambled eggs on toast', carbs: 18, speed: 'slow', desc: '2 eggs (2 g) + 1 slice whole wheat toast (16 g).' }
   ];
   const D1_LUNCH = [
-    { name: 'Cheese pizza slice', carbs: 30, speed: 'slow' },
-    { name: 'Chicken wrap', carbs: 25, speed: 'slow' },
-    { name: 'Pasta with sauce', carbs: 50, speed: 'slow' }
+    { name: 'Cheese pizza slice', carbs: 25, speed: 'slow' },
+    { name: 'Chicken wrap', carbs: 27, speed: 'slow' },
+    { name: 'Pasta with sauce', carbs: 42, speed: 'slow' }
   ];
 
   addPassage('day1-wakeup', {
@@ -3410,18 +3481,18 @@ function registerDay1Passages() {
 
   addPassage('day1-dinner', {
     content: () => sceneArt('🥢 🍚 🍗 🥦', ['🏠 🍽️'], 'evening') + '<h2>Dinner</h2>' +
-      '<p class="passage-scene">Stir-fry: about one cup of rice, chicken and veggies. No label.</p>' +
-      '<p>About how many carbs? <small>(Rice is the big one. Chicken has almost none.)</small></p>',
+      '<p class="passage-scene">Stir-fry: about one cup of rice, chicken and ½ cup of broccoli. No label.</p>' +
+      '<p>About how many carbs? <small>(½ cup of cooked rice has about 24 g. Chicken has little.)</small></p>',
     onEnter: () => { state.time.hour = 17.5; tick(1.5); },
     quiz: () => ({
       options: [
-        { text: '🍚 About 15g', correct: false, feedback: 'A bit low. A cup of rice has a lot more than that.' },
-        { text: '🍚 About 50g', correct: true, feedback: 'Nice! About 45g in the rice and a few in the veggies and sauce.' },
-        { text: '🍚 About 100g', correct: false, feedback: 'That\'s more like two big plates. One cup of rice is closer to 45g.' }
+        { text: '🍚 About 15g', correct: false, feedback: 'A bit low. Half a cup of rice is already 24 g.' },
+        { text: '🍚 About 55g', correct: true, feedback: 'Nice! One cup of rice is 48 g, plus about 6 g in the broccoli.' },
+        { text: '🍚 About 100g', correct: false, feedback: 'That\'s more like two plates. One cup of rice is about 48 g.' }
       ],
       continueText: '🍽️ Eat dinner',
       onDone: () => {
-        eatMeal(50, 'slow'); tick(0.5); advanceTime(0.5);
+        eatMeal(54, 'slow'); tick(0.5); advanceTime(0.5);
         if (collectBetaCell('estimating-carbs')) setTimeout(() => showBetaCellNotification('Estimating Carbs Without Labels', 'green'), 500);
       },
       next: 'day1-dinner-social'

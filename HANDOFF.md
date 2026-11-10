@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-11-10
 **Version:** v0.2 (in progress). v0.1 backup: `backup/v0.1-2026-11-10/`
-**Status:** Full 7-day week plays end to end with no crashes (automated playthrough Tue-Sun plus a manual Day 1, 2026-11-10). Mechanics overhaul done. Movable avatar, overlay/tracking system, and a fact-verification pass are NOT started.
+**Status:** Full 7-day week plays end to end with no crashes (automated playthrough Tue-Sun plus a manual Day 1, 2026-11-10). Mechanics overhaul done. Facts checked against Diabetes Canada and Health Canada (section 8). Movable avatar and overlay/tracking system are NOT started.
 
 ---
 
@@ -24,7 +24,7 @@ Open http://localhost:3000. (`.claude/launch.json` has the same config as `sugar
 |---|---|
 | `sugar-rush/index.html` | Page, all CSS (inline `<style>`), HUD and Pip markup |
 | `sugar-rush/js/game.js` | The entire game (~3,500 lines, one IIFE `SugarRush`) |
-| `design/` | 8 original design docs (partly outdated by v0.2, see section 9) |
+| `design/` | 8 original design docs (partly outdated by v0.2, see section 9), plus `fact-sources.md` (the source reference for every fact) |
 | `backup/v0.1-2026-11-10/` | game.js + index.html before the v0.2 overhaul |
 | `D:/Repos/sugarrush/` | Git repo copy, remote `github.com/WintermuteEntertainment/sugarrush` (private) |
 | Orphaned, not loaded | `js/app.js`, `js/engine/`, `js/hud/`, `js/passages/`, `js/companion/`, `css/style.css`, `data/food-database.json` |
@@ -110,11 +110,15 @@ Open http://localhost:3000. (`.claude/launch.json` has the same config as `sugar
 **Not started (the "broader scope" for the next session)**
 1. **Movable avatar.** Tap/click to move your avatar around a scene (house, school, park) to reach meals, games, Pip, the journal. Also metaphorical maps (e.g. walking along a BG timeline).
 2. **Overlay / tracking system.** Tap places or HUD items to open overlays explaining what they are, where you are, and the consequences of your choices across the day, week, and saves. The day sparkline and weekly bars are a start.
-3. **Fact verification pass** (section 8).
+3. Answer the source questions in section 8.
+
+**Fixed later on 2026-11-10 (fact pass)**
+- Meals are locked to time of day (`MEAL_SLOTS` + `pickMeal` in section 10). Weekend-only lunches (movies, party, arena, potluck) never show on school days. The ice cream trip is a treat outing, so it's never drawn as a meal.
+- Sick Friday uses two gentle meals (`sick-lunch`, `sick-dinner`).
+- Every fact and food number now comes from Diabetes Canada or Health Canada. See `design/fact-sources.md` and section 8.
+- Exercise Balance is a bit harder: faster drops, surprise sprints, snacks a little slower to kick in.
 
 **Bugs / content gaps found 2026-11-10**
-- Random meals ignore time of day (e.g. "Movie Theater" or "Smoothie" as breakfast, "Bagel Morning" at lunch). Fix: tag meals with `slot: 'breakfast' | 'lunch' | 'dinner' | 'any'` and filter in `choosePicks`.
-- Sick Friday can still draw "The Buffet" or other big meals for lunch. Day 5 should use gentle sick-day foods.
 - Friday's sick morning text says "No school today", but Friday's AM mini-game and school-only filter still treat it as a school day (harmless, but inconsistent).
 - Evening events don't set the clock (time jumps from dinner straight to 21:00 at bedtime). Fine, but could show ~19:30.
 - `Week 2+` Day 1 uses the generated day (no tutorial) with mini-games Carb Counter / Exercise Balance. Not play-tested.
@@ -123,15 +127,30 @@ Open http://localhost:3000. (`.claude/launch.json` has the same config as `sugar
 - The `beforeunload` "leave site?" prompt also appears when a developer reloads; use the Back-button guard or menu instead.
 - Old v0.1 saves load (migrated), but their in-flight insulin/carbs are dropped and they restart at the start of their saved day.
 
-**Unverified numbers (Claude's estimates, not from an approved source)**
-- All carb counts in meals, snacks, mini-games, and the Carb Counter reference chart.
-- Treat-the-Low amounts: "¾ cup juice/pop", "1 tbsp sugar/honey", "~15g glucose tabs". Claude recalls these from Diabetes Canada guidance but did not check a source.
-- "Fast sugar, wait 15 minutes, recheck; snack with carbs + protein if the next meal is over an hour away" (same caveat).
-- Simulation constants (absorption times, insulin timing) are game tuning, not medical claims, but should never be presented as facts.
+## 8. Facts and sources (done 2026-11-10)
 
-## 8. Fact sources rule
+**Read `design/fact-sources.md` before adding or changing any fact.** It lists every source page (Diabetes Canada and Health Canada), the statements taken from each, and Health Canada's carbohydrate table.
 
-Every "Did you know?" / Beta Cell / tip must trace to **Diabetes Canada** (diabetes.ca, formerly the Canadian Diabetes Association) or **Canada's Food Guide** (food-guide.canada.ca). Nothing from general knowledge. None of the 50 Beta Cells have been verified yet. Suggested process: one pass per category, recording the source URL next to each entry (a `src` field in `betaCells`), and flagging anything with no source for Tim.
+- All 50 Beta Cells were rewritten to say only what the sources say. Each has a `src` field (37 cite sources; 13 gold "life wisdom" cells are marked `encouragement`, meaning no medical claim).
+- Every food carb number (meals, snacks, bedtime and recovery snacks, Carb Counter, Portion Estimator, scripted days) comes from Health Canada's *Nutrient Value of Some Common Foods* (2008). Mixed meals show their parts, e.g. "3 pancakes (33 g) + syrup (28 g)".
+- Label Reader no longer uses made-up products. It shows real Health Canada values (carbohydrate and fibre only, rounded to whole grams like a label) and teaches Diabetes Canada's "subtract fibre" rule.
+- Treat-the-Low only offers items on Diabetes Canada's fast-sugar list, shows no amounts, and says the amount depends on age and comes from the diabetes team.
+
+**What the check changed (my v0.2 text was wrong or unsourced):**
+- Juice for a low: Diabetes Canada says 150 mL for adults (I had ¾ cup = 175 mL). For **children it depends on age**: about 5 g under 5 years, 10 g at 5-10, 15 g over 10 (CPG ch. 34). The game now shows no amount.
+- "Fat or chocolate slows sugar" is not in any source; removed. Milk being slower *is* sourced.
+- Diabetes Canada says to **subtract fibre** from total carbohydrate (I had said "ask your team").
+- Many carb values changed, e.g. plain bagel 38 g (was 48), baked potato 37 g (was 26), 2 cookies 13 g (was 20).
+- Removed as unsourced: "not caused by diet", "stress hormones raise BG", "thumb = 1 tbsp", "bedtime snack keeps BG steady", "protein raises BG slowly", "insulin stacking", "fist = 1 cup" as a firm rule.
+
+**Open questions on sources (for Tim):**
+- Diabetes Canada's 2023 update uses **3.9** mmol/L as the low alert value; the 2018 chapter and the game use **4.0**. The children's chapter gives no number. Keep 4.0?
+- "Wait 15 minutes, then recheck" and "snack with carbs + protein if the next meal is over an hour away" come from the **adult** hypoglycemia chapter. The children's chapter doesn't say. OK to use for kids?
+- Some statements are marked **[partial]** in fact-sources.md: the reading tool only summarized those parts of long pages. Worth a human read of CPG ch. 9, 10, 12 and 14.
+- Roti and perogies aren't in Health Canada's table, so they were replaced with naan and dumplings.
+- Health Canada's nutrient table is from 2008. It's the newest version I found on canada.ca.
+
+The Canada's Food Guide site (food-guide.canada.ca) currently shows a "page moved" notice; the same content was read on canada.ca.
 
 ## 9. Design docs status
 
