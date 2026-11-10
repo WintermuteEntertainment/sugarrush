@@ -1,7 +1,7 @@
 # Sugar Rush - Project Handoff
 
-**Last updated:** 2026-11-06
-**Status:** Playable prototype, Day 1-7 loop complete, art/audio placeholder phase
+**Last updated:** 2026-11-10
+**Status:** Alpha -- all 9 mini-games implemented, Day 1-7 loop complete, deployed to sugarrush.timcase.ca (pending)
 
 ## What This Is
 
@@ -9,7 +9,7 @@ A Type 1 Diabetes education game for ages 5-15. 7-day week structure, narrative 
 
 ## Architecture
 
-**Single-file engine:** `sugar-rush/js/game.js` (~2943 lines) contains everything: state, BG simulation, narrative engine, HUD, companion, mini-games, all passages, event pools, save/load, and init.
+**Single-file engine:** `sugar-rush/js/game.js` (~3500+ lines) contains everything: state, BG simulation, narrative engine, HUD, companion, all 9 mini-games, all passages, event pools, save/load, and init.
 
 **NOT used:** The modular files (`js/engine/`, `js/hud/`, `js/passages/`, `js/app.js`, `css/style.css`) are orphaned stubs from an earlier plan. The game loads only `game.js` via a `<script>` tag in `index.html`. All CSS is inline in `index.html`.
 
@@ -21,7 +21,7 @@ A Type 1 Diabetes education game for ages 5-15. 7-day week structure, narrative 
 
 - **Full 7-day game loop.** Day 1 is a scripted tutorial. Days 2-7 are generated from event pools with difficulty scaling (tier 1-3).
 - **BG simulation.** Carb absorption (fast/slow), insulin action (onset delay, duration, IOB), basal drift, exercise drop, energy drain from out-of-range BG.
-- **3 mini-games implemented:** Carb Counter, Dose Calculator, Treat-the-Low. All render inline in the passage area. Each awards stars (0-3) and a Beta Cell on first play.
+- **All 9 mini-games implemented:** Carb Counter, Dose Calculator, Treat-the-Low, Label Reader, Exercise Balance, Pack Your Bag, Glucose Roller, Portion Estimator, Sick Day Protocol. All render inline in the passage area. Each awards stars (0-3) and a Beta Cell on first play.
 - **50 Beta Cell collectibles** across 4 categories (Facts/Skills/Life Wisdom/Emergency). Knowledge Journal viewer with category filtering and detail view.
 - **Event pools:** 20+ meal events, 15+ social events, 8+ emotional events, 10+ practical events. Tiered by difficulty, drawn without repeats.
 - **Scripted anchors:** Day 2 pre-bolusing, Day 3 estimation challenge, Day 4 soccer practice, Day 5 sick day, Day 6 Saturday brunch, Day 7 field trip.
@@ -36,7 +36,6 @@ A Type 1 Diabetes education game for ages 5-15. 7-day week structure, narrative 
 ## What's NOT Built Yet
 
 ### Must-have before release
-- **6 mini-games not implemented:** Label Reader, Exercise Balance, Pack Your Bag, Glucose Roller, Portion Estimator, Sick Day Protocol. The schedule references them (days 2-7) but they fall through to a "simulated" placeholder.
 - **Day 1 morning Carb Counter** is still a placeholder passage, not the actual implemented mini-game.
 - **Unit toggle UI.** `bgDisplay()` supports mmol/L and mg/dL conversion but there's no settings screen or toggle to switch.
 
@@ -67,7 +66,7 @@ Every passage tagged with `// AUDIO:` comments needs sound:
 
 ## Known Bugs / Issues
 
-1. **`site-change` practical event** (line ~1215): reads `state.player.device?.insulin` at REGISTRATION time (module load), not at render time. The scene text is frozen to whatever the default device value is (`'pump'`), regardless of what the player chose in setup.
+1. ~~**`site-change` practical event**~~ FIXED 2026-11-10. Converted to inline `practicalPool.push()` with device-adaptive `content: (s) =>` callback.
 
 2. **Beta Cell count mismatch:** `state.score.totalCollectibles` is set to 50, but the HUD element `#hud-beta-cells` shows the collected count against this total. The actual `betaCells` array has 50 entries, so this is correct -- but the HUD initially showed "/ 48" in earlier screenshots, suggesting `totalCollectibles` may have been 48 at some point. Currently reads 50.
 
