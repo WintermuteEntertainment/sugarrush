@@ -299,12 +299,13 @@ function initHUD() {
   hud.clock = document.getElementById('hud-clock');
   hud.betaCells = document.getElementById('hud-beta-cells');
   hud.effects = document.getElementById('screen-effects');
+  hud.avatarName = document.getElementById('hud-avatar-name');
+  hud.avatarFigure = document.getElementById('hud-avatar-figure');
   onChange(updateHUD);
-  // Make beta cell counter clickable to open journal
   document.getElementById('hud-collectibles').style.cursor = 'pointer';
   document.getElementById('hud-collectibles').addEventListener('click', openJournal);
 }
-function showHUD() { hud.el.classList.remove('hidden'); }
+function showHUD() { hud.el.classList.remove('hidden'); updateAvatar(); }
 
 function updateHUD() {
   if (!hud.el || hud.el.classList.contains('hidden')) return;
@@ -329,18 +330,81 @@ function updateHUD() {
   else if (bg < 5) hud.effects.className = 'low-mild';
   else if (bg > 15) hud.effects.className = 'high-severe';
   else if (bg > 12) hud.effects.className = 'high-mild';
+  updateAvatar();
+  if (!document.getElementById('companion').classList.contains('hidden')) pipMoodFromBG();
+}
+
+function updateAvatar() {
+  if (!hud.avatarFigure) return;
+  const a = state.player.appearance;
+  const hatEl = hud.avatarFigure.querySelector('.av-hat');
+  const faceEl = hud.avatarFigure.querySelector('.av-face');
+  const shirtEl = hud.avatarFigure.querySelector('.av-shirt');
+  const shoesEl = hud.avatarFigure.querySelector('.av-shoes');
+  hatEl.textContent = HATS[a.hat] || '';
+  faceEl.textContent = FACES[a.face] || '';
+  shirtEl.style.background = SHIRT_COLORS[a.shirt] || SHIRT_COLORS[0];
+  shoesEl.textContent = SHOES[a.shoes] || '';
+  if (hud.avatarName) hud.avatarName.textContent = state.player.name || '';
 }
 
 // ============================================
-// 6. COMPANION
+// 6. COMPANION (Pip)
 // ============================================
 
 let companionTimeout = null;
+let pipBlinkInterval = null;
+let pipMood = 'neutral';
+
+function setPipMood(mood) {
+  pipMood = mood;
+  const face = document.getElementById('companion-face');
+  if (!face) return;
+  face.classList.remove('happy', 'worried', 'alert', 'thinking');
+  if (mood !== 'neutral') face.classList.add(mood);
+  const led = document.getElementById('pip-led');
+  if (led) {
+    if (mood === 'alert') { led.style.background = 'var(--zone-red)'; led.style.boxShadow = '0 0 4px var(--zone-red)'; }
+    else if (mood === 'worried') { led.style.background = 'var(--zone-yellow)'; led.style.boxShadow = '0 0 4px var(--zone-yellow)'; }
+    else { led.style.background = 'var(--zone-green)'; led.style.boxShadow = '0 0 4px var(--zone-green)'; }
+  }
+}
+
+function pipBlink() {
+  const face = document.getElementById('companion-face');
+  if (!face || face.classList.contains('hidden')) return;
+  face.classList.add('blink');
+  setTimeout(() => face.classList.remove('blink'), 150);
+}
+
+function startPipBlink() {
+  if (pipBlinkInterval) clearInterval(pipBlinkInterval);
+  pipBlinkInterval = setInterval(() => {
+    if (Math.random() < 0.4) pipBlink();
+  }, 2500);
+}
+
+function pipMoodFromBG() {
+  const bg = state.bg.current;
+  if (bg < 4) setPipMood('alert');
+  else if (bg < 5 || bg > 15) setPipMood('worried');
+  else if (bg >= 5 && bg <= 10) setPipMood('happy');
+  else setPipMood('neutral');
+}
+
 function showCompanion(text, dur) {
   const el = document.getElementById('companion');
+  const face = document.getElementById('companion-face');
   el.classList.remove('hidden');
+  el.classList.add('entering');
+  setTimeout(() => el.classList.remove('entering'), 400);
   document.getElementById('companion-text').textContent = text;
-  // AUDIO: Play companion dialogue blip
+  pipMoodFromBG();
+  if (face) {
+    face.classList.add('speaking');
+    setTimeout(() => face.classList.remove('speaking'), 500);
+  }
+  startPipBlink();
   if (companionTimeout) clearTimeout(companionTimeout);
   if (dur > 0) companionTimeout = setTimeout(() => el.classList.add('hidden'), dur);
 }
@@ -401,7 +465,7 @@ const betaCells = [
   { id: 'site-rotation', name: 'Site Rotation and Care', cat: 'green', desc: 'Whether you use a pump or injections, rotating where you put your sites/inject prevents scar tissue buildup. Common spots: belly, thighs, upper arms, and hips. Give each spot time to rest before using it again.' },
   { id: 'portion-estimation', name: 'Portion Size Estimation', cat: 'green', desc: 'Your hand is a built-in measuring tool. Fist = 1 cup (rice, pasta). Palm = protein serving. Thumb = 1 tablespoon (peanut butter). Cupped hand = 1/2 cup (fruit). These aren\'t exact, but they\'re close enough for good carb counting.' },
   { id: 'pre-bolusing', name: 'Pre-Bolusing — Timing Your Insulin', cat: 'green', desc: 'Taking insulin 10-15 minutes BEFORE eating gives it a head start, so it\'s working when the carbs hit your blood. This helps prevent the post-meal spike. Start small — even 5 minutes early makes a difference.' },
-  { id: 'correcting-high', name: 'Correcting a High', cat: 'green', desc: 'When BG is high, a correction dose brings it back down. Use your correction factor: if 1 unit drops you 3 mmol/L and you\'re at 15 (target 8), you need about 2-2.5 units. Be careful not to stack corrections too close together.' },
+  { id: 'correcting-high', name: 'Correcting a High', cat: 'green', desc: 'When BG is high, a correction dose brings it back down. Your diabetes team gives you a correction factor that tells you how much one unit of insulin lowers your BG. Use it to figure out how much extra insulin you need. Be careful not to stack corrections too close together, and always wait 2-3 hours before correcting again.' },
 
   // GOLD — Life Wisdom (13)
   { id: 'talking-to-friends', name: 'Talking to Friends About T1D', cat: 'gold', desc: 'Some days you\'ll want to explain everything. Other days you won\'t want to talk about it at all. Both are fine. You don\'t owe anyone an explanation — but having a few people who understand can make things easier.' },
@@ -1326,7 +1390,7 @@ registerPracticalEvent('school-supply', 'School Nurse Supply Drop', 1,
 const miniGameSchedule = {
   2: { am: { name: 'Label Reader',      desc: 'Read a Canadian Nutrition Facts label. No rush. Accuracy is everything.' },
        pm: { name: 'Exercise Balance',   desc: 'Keep exercising, but watch your BG. Pause to snack when you need to.' } },
-  3: { am: { name: 'Dose Calculator',   desc: 'Calculate the right insulin dose from carbs and current BG.' },
+  3: { am: { name: 'Dose Calculator',   desc: 'Think through the steps of figuring out your mealtime insulin dose.' },
        pm: { name: 'Pack Your Bag',     desc: 'Heading to school. Pack everything you need for a day out.' } },
   4: { am: { name: 'Carb Counter',      desc: 'Restaurant-style plate. No labels, just instinct.' },
        pm: { name: 'Glucose Roller',    desc: 'Keep the ball in the green zone. Feel how BG has momentum.' } },
@@ -1334,7 +1398,7 @@ const miniGameSchedule = {
        pm: { name: 'Sick Day Protocol', desc: 'You\'re sick and BG is high. Step through the protocol correctly.' } },
   6: { am: { name: 'Label Reader',      desc: 'Trickier label. More questions. Take your time.' },
        pm: { name: 'Pack Your Bag',     desc: 'Going on a trip. More supplies, more to remember.' } },
-  7: { am: { name: 'Dose Calculator',   desc: 'Complex scenario — odd carb counts, active insulin on board, BG correction needed.' },
+  7: { am: { name: 'Dose Calculator',   desc: 'Tricky scenario: estimation, fat content, and knowing when to wait.' },
        pm: { name: 'Exercise Balance',  desc: 'Sports tournament. Longer session, harder to stay in range.' } }
 };
 
@@ -1490,93 +1554,168 @@ MiniGames['Carb Counter'] = {
 };
 
 // ---- Dose Calculator ----
-// Show a meal + current BG; player picks insulin units via slider.
+// Process-based: teaches the STEPS of dosing, not specific numbers.
+// Everyone's ratios are different and set by their diabetes team.
 MiniGames['Dose Calculator'] = {
   play: function(opts, onComplete) {
-    // AUDIO: Play mini-game start jingle
+    const tier = opts.tier || 1;
+    const bg = opts.currentBG || state.bg.current;
     const meals = [
       { name: 'Ham sandwich + apple',  carbs: 45, emoji: '🥪' },
       { name: 'Slice of pizza + salad',carbs: 35, emoji: '🍕' },
       { name: 'Cereal with milk',      carbs: 50, emoji: '🥣' },
       { name: 'Chicken burrito',       carbs: 60, emoji: '🌯' },
       { name: 'Mac and cheese',        carbs: 40, emoji: '🧀' },
-      { name: 'Rice + stir-fry',       carbs: 55, emoji: '🍚' },
-      { name: 'Spaghetti with sauce',  carbs: 65, emoji: '🍝' },
-      { name: 'Two pancakes + syrup',  carbs: 48, emoji: '🥞' }
+      { name: 'Rice + stir-fry',       carbs: 55, emoji: '🍚' }
     ];
     const meal = meals[Math.floor(Math.random() * meals.length)];
-    const bg = opts.currentBG || state.bg.current;
-    const correct = recommendedDose(meal.carbs, bg);
-    // Display the breakdown for learning
-    const mealUnits = meal.carbs / BGConfig.carbRatio;
-    const correctionUnits = bg > BGConfig.correctionTarget ? (bg - BGConfig.correctionTarget) / BGConfig.correctionFactor : 0;
+    const bgHigh = bg > 12;
+    const hasIOB = Math.random() > 0.5 && tier >= 2;
 
-    renderMGPanel(
-      '<h2>💉 Dose Calculator</h2>' +
-      '<p class="mg-subtitle">Calculate your mealtime insulin dose.</p>' +
-      '<div class="mg-food-row">' +
-        '<div><span class="mg-food-emoji">' + meal.emoji + '</span><span class="mg-food-name">' + meal.name + '</span></div>' +
-        '<span class="mg-food-portion">' + meal.carbs + 'g carbs</span>' +
-      '</div>' +
-      '<div class="mg-food-row">' +
-        '<div><span class="mg-food-emoji">🩸</span><span class="mg-food-name">Current BG</span></div>' +
-        '<span class="mg-food-portion">' + bg.toFixed(1) + ' mmol/L</span>' +
-      '</div>' +
-      '<div style="padding:14px;background:white;border-radius:8px;border:2px solid var(--border);margin:16px 0;font-size:14px;color:var(--text-secondary);line-height:1.7;">' +
-        '<strong>Your ratios:</strong><br>' +
-        '• 1 unit insulin per <strong>' + BGConfig.carbRatio + 'g</strong> carbs<br>' +
-        '• Target BG: <strong>' + BGConfig.correctionTarget + '</strong> mmol/L<br>' +
-        '• 1 unit drops BG by <strong>' + BGConfig.correctionFactor + '</strong> mmol/L' +
-      '</div>' +
-      '<div class="mg-slider-row">' +
-        '<label>Dose:</label>' +
-        '<input type="range" id="mg-dose-slider" min="0" max="15" step="0.5">' +
-        '<span class="mg-slider-value" id="mg-dose-val">0.0u</span>' +
-      '</div>' +
-      '<div style="text-align:center;margin-top:16px;">' +
-        '<button class="mg-action-btn" id="mg-dose-submit">Deliver Dose</button>' +
-      '</div>' +
-      '<div id="mg-result"></div>'
-    );
+    var steps;
+    if (tier <= 1) {
+      steps = [
+        { q: 'First step before dosing for a meal?',
+          choices: [
+            { text: 'Count the carbs in the meal', correct: true, feedback: 'Right! Knowing the carbs is always step one.' },
+            { text: 'Take the same dose as last time', correct: false, feedback: 'Every meal is different. Count the carbs first, then figure out the dose with your diabetes team\'s formula.' },
+            { text: 'Skip the dose if you feel fine', correct: false, feedback: 'Even if you feel OK, your body needs insulin to handle the carbs. Always dose for meals.' }
+          ]},
+        { q: 'You counted ' + meal.carbs + 'g of carbs. What do you need to know to figure out your dose?',
+          choices: [
+            { text: 'Your insulin-to-carb ratio (set by your diabetes team)', correct: true, feedback: 'Exactly! Your ratio tells you how many grams of carbs one unit of insulin covers. Everyone\'s is different.' },
+            { text: 'How much you weigh', correct: false, feedback: 'Weight matters for some medications, but for mealtime insulin you use your insulin-to-carb ratio. Your diabetes team sets this for you.' },
+            { text: 'What time of day it is', correct: false, feedback: 'Some people do have different ratios at different times, but the key thing you need is your insulin-to-carb ratio.' }
+          ]},
+        { q: 'Your BG is ' + bg.toFixed(1) + ' mmol/L.' + (bgHigh ? ' That\'s above target.' : ' That\'s in range.') + ' What does this mean for your dose?',
+          choices: bgHigh ? [
+            { text: 'I might need a correction on top of my meal dose', correct: true, feedback: 'Yes! When BG is above your target, your diabetes team may have you add a correction. Ask them about your correction factor.' },
+            { text: 'I should take less insulin because the number is already high', correct: false, feedback: 'Actually it\'s the opposite. A high BG means you may need MORE insulin: your meal dose plus a correction.' },
+            { text: 'It doesn\'t affect my dose', correct: false, feedback: 'Your current BG matters! When it\'s above target, you may need a correction dose on top of your meal dose.' }
+          ] : [
+            { text: 'My BG is in range, so I just need my meal dose', correct: true, feedback: 'Right! In range means no correction needed. Just dose for the carbs.' },
+            { text: 'I should take extra insulin to stay low', correct: false, feedback: 'Going lower than your target is dangerous. Dose for the carbs you\'re eating, not to push BG down further.' },
+            { text: 'I can skip the dose since my BG looks good', correct: false, feedback: 'Even with perfect BG, the carbs you\'re about to eat will raise it. You still need your meal dose.' }
+          ]}
+      ];
+    } else if (tier === 2) {
+      steps = [
+        { q: 'You\'re about to eat ' + meal.emoji + ' ' + meal.name + ' (' + meal.carbs + 'g carbs). Your BG is ' + bg.toFixed(1) + '. What\'s your first step?',
+          choices: [
+            { text: 'Use my carb ratio to figure out the meal dose', correct: true, feedback: 'Right. Your diabetes team gave you a ratio. Divide the carbs by that number to get your meal dose.' },
+            { text: 'Look up the dose online', correct: false, feedback: 'Doses are personal. Use the ratio your diabetes team set for you, not a number from the internet.' },
+            { text: 'Take the same dose as yesterday', correct: false, feedback: 'Different meals have different carbs. Always calculate based on what you\'re actually eating.' }
+          ]},
+        { q: (bgHigh ? 'BG is above target. ' : '') + (hasIOB ? 'You also have active insulin from a dose 2 hours ago. ' : '') + 'What should you consider?',
+          choices: hasIOB ? [
+            { text: 'Subtract the insulin still active (IOB) so I don\'t stack doses', correct: true, feedback: 'Smart! Insulin on board (IOB) is still working. Stacking doses can cause a dangerous low. Your pump tracks this, or ask your team how to estimate.' },
+            { text: 'Ignore the earlier dose and calculate fresh', correct: false, feedback: 'That earlier insulin is still working. If you ignore it and dose full again, you could go dangerously low. Always account for insulin on board.' },
+            { text: 'Wait until the old insulin wears off completely', correct: false, feedback: 'You don\'t have to wait. Just subtract the active insulin from your new dose. Your pump may do this automatically.' }
+          ] : (bgHigh ? [
+            { text: 'Add a correction dose using my correction factor', correct: true, feedback: 'Yes! Your correction factor tells you how much one unit lowers your BG. Your diabetes team sets this number for you.' },
+            { text: 'Double my normal meal dose', correct: false, feedback: 'Never just double your dose. Use your correction factor to calculate the exact extra amount. More is not always better with insulin.' },
+            { text: 'Skip the meal and wait for BG to come down', correct: false, feedback: 'You can still eat! Just add a correction to your meal dose. Skipping meals isn\'t a good way to manage highs.' }
+          ] : [
+            { text: 'Check if I have insulin still active from an earlier dose', correct: true, feedback: 'Good thinking! Even though BG is in range, insulin on board from a recent dose could stack with your new dose and cause a low.' },
+            { text: 'Nothing else, just dose for the carbs', correct: false, feedback: 'Close, but always check for active insulin first. If you dosed recently, that insulin is still working.' },
+            { text: 'Wait 30 minutes after eating to dose', correct: false, feedback: 'Actually, dosing before or right when you eat is usually better. Waiting lets BG spike first.' }
+          ])},
+        { q: 'When should you take your mealtime insulin?',
+          choices: [
+            { text: '10-15 minutes before eating (pre-bolus) when possible', correct: true, feedback: 'Pre-bolusing gives insulin a head start so it\'s working when carbs hit your blood. Even 5 minutes helps. Ask your team what timing works for you.' },
+            { text: 'Right after finishing the meal', correct: false, feedback: 'That works in a pinch, but dosing before you eat helps prevent the post-meal BG spike. Talk to your team about pre-bolusing.' },
+            { text: 'Only when BG goes above target after eating', correct: false, feedback: 'Waiting until BG is already high means playing catch-up. Dosing before or at the start of the meal keeps things steadier.' }
+          ]}
+      ];
+    } else {
+      steps = [
+        { q: 'Tricky scenario: you\'re eating ' + meal.emoji + ' ' + meal.name + ' at a birthday party. You\'re not sure exactly how many carbs are in your portion. What do you do?',
+          choices: [
+            { text: 'Estimate using hand-size references and dose for that', correct: true, feedback: 'Good! A fist is about 1 cup, a palm is a protein serving. Estimation is a skill. You won\'t always be exact, and that\'s OK.' },
+            { text: 'Skip eating so you don\'t have to guess', correct: false, feedback: 'You deserve to enjoy the party! Estimation gets better with practice. A close guess is much better than not eating.' },
+            { text: 'Eat without dosing and correct later if BG goes high', correct: false, feedback: 'That leads to a big spike. Even a rough estimate and partial dose is better than none.' }
+          ]},
+        { q: 'Your BG is ' + bg.toFixed(1) + ' and you notice the meal has a lot of fat (like pizza or fried food). How does fat affect dosing?',
+          choices: [
+            { text: 'Fat slows carb absorption, so BG may rise later than expected', correct: true, feedback: 'Right! With fatty meals, BG might look fine at first but climb hours later. Some people split their dose or use an extended bolus. Ask your team.' },
+            { text: 'Fat doesn\'t affect BG, only carbs matter', correct: false, feedback: 'Fat does matter! It slows digestion, so carbs hit your blood later. This can cause a delayed BG spike that catches people off guard.' },
+            { text: 'Take extra insulin because fat raises BG', correct: false, feedback: 'It\'s not that fat raises BG directly. It slows how fast carbs are absorbed. The total dose may be similar, but the timing matters.' }
+          ]},
+        { q: 'After the meal, your BG is climbing. You dosed correctly. What should you do?',
+          choices: [
+            { text: 'Wait. Insulin takes time to work. Check again in 1-2 hours.', correct: true, feedback: 'Patience! Fast-acting insulin takes 15-30 minutes to start working and peaks at 1-2 hours. Don\'t stack corrections too soon.' },
+            { text: 'Take another full correction dose right away', correct: false, feedback: 'Stacking insulin is dangerous. Your earlier dose is still absorbing. Give it at least 2-3 hours before correcting again.' },
+            { text: 'Exercise to bring it down faster', correct: false, feedback: 'Exercise on top of a fresh insulin dose can cause a dangerous low. Give the insulin time to work first.' }
+          ]},
+        { q: 'What\'s the most important thing to remember about insulin dosing?',
+          choices: [
+            { text: 'My ratios are personal. My diabetes team sets them and they can change over time.', correct: true, feedback: 'Exactly. Growth, stress, illness, exercise, and hormones all affect your needs. Regular check-ins with your team keep your ratios tuned.' },
+            { text: 'There\'s one correct dose for each amount of carbs', correct: false, feedback: 'Dosing is personal! The same meal might need different doses for different people, or even for the same person on different days.' },
+            { text: 'Once your ratios are set, they stay the same forever', correct: false, feedback: 'Ratios change! Growing, getting sick, being more active, stress, and hormones all shift what you need. Keep checking in with your team.' }
+          ]}
+      ];
+    }
 
-    setTimeout(() => {
-      const slider = document.getElementById('mg-dose-slider');
-      const valEl  = document.getElementById('mg-dose-val');
-      // Random starting offset so it's not pre-correct
-      const offset = (Math.random() > 0.5 ? 1 : -1) * (1 + Math.random() * 1.5);
-      const start = Math.max(0, Math.min(15, Math.round((correct + offset) * 2) / 2));
-      slider.value = start;
-      valEl.textContent = parseFloat(slider.value).toFixed(1) + 'u';
-      slider.addEventListener('input', () => { valEl.textContent = parseFloat(slider.value).toFixed(1) + 'u'; });
-      document.getElementById('mg-dose-submit').addEventListener('click', () => {
-        const chosen = parseFloat(slider.value);
-        const diff = Math.abs(chosen - correct);
-        const stars = starsFromDiff(diff, [0.5, 1.0, 2.0]);
-        const cls = stars === 3 ? 'good' : stars >= 1 ? 'ok' : 'bad';
-        const headline = stars === 3 ? 'Perfect dose!' :
-                         stars === 2 ? 'Very close.' :
-                         stars === 1 ? 'In the ballpark.' :
-                                       'Off by quite a bit.';
-        const math = 'Meal: ' + meal.carbs + 'g ÷ ' + BGConfig.carbRatio + ' = ' + mealUnits.toFixed(1) + 'u' +
-                     (correctionUnits > 0 ? ' + correction (' + correctionUnits.toFixed(1) + 'u)' : '') +
-                     ' → <strong>' + correct + 'u</strong>';
-        const warn = chosen > correct + 1 ? ' ⚠️ Too much — BG may go low later.' :
-                     chosen < correct - 1 ? ' ⚠️ Too little — BG will run high.' : '';
-        const msg = headline + '<br>' + math + warn;
-        const resDiv = document.getElementById('mg-result');
-        resDiv.className = 'mg-result ' + cls;
-        resDiv.innerHTML = '<div style="font-size:20px;margin-bottom:6px;">' +
-          (stars === 3 ? '⭐⭐⭐' : stars === 2 ? '⭐⭐' : stars === 1 ? '⭐' : '❌') + '</div>' + msg +
-          '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-continue">Continue</button></div>';
-        document.getElementById('mg-continue').addEventListener('click', () => {
-          // Apply the chosen dose (and the meal)
-          eatFood(meal.carbs, 'slow');
-          doseInsulin(chosen);
-          state.score.mealsManaged++;
-          onComplete({ stars: stars, summary: msg });
+    var stepIdx = 0, correctCount = 0;
+
+    function renderStep() {
+      var s = steps[stepIdx];
+      var shuffled = s.choices.slice().sort(function() { return Math.random() - 0.5; });
+      renderMGPanel(
+        '<h2>💉 Dose Steps</h2>' +
+        '<p class="mg-subtitle">Think through the dosing process step by step.</p>' +
+        '<div class="mg-food-row">' +
+          '<div><span class="mg-food-emoji">' + meal.emoji + '</span><span class="mg-food-name">' + meal.name + '</span></div>' +
+          '<span class="mg-food-portion">' + meal.carbs + 'g carbs</span>' +
+        '</div>' +
+        '<div class="mg-food-row">' +
+          '<div><span class="mg-food-emoji">🩸</span><span class="mg-food-name">Current BG</span></div>' +
+          '<span class="mg-food-portion">' + bg.toFixed(1) + ' mmol/L</span>' +
+        '</div>' +
+        '<p style="margin:16px 0 8px;font-weight:600;font-size:15px;">Step ' + (stepIdx + 1) + ' of ' + steps.length + '</p>' +
+        '<p style="margin-bottom:14px;">' + s.q + '</p>' +
+        '<div class="mg-options-grid" style="grid-template-columns:1fr;">' +
+          shuffled.map(function(c, i) {
+            return '<div class="mg-option-card" data-idx="' + i + '" style="text-align:left;padding:14px 16px;">' +
+              '<span class="mg-opt-name">' + c.text + '</span></div>';
+          }).join('') +
+        '</div>' +
+        '<div id="mg-result"></div>'
+      );
+
+      setTimeout(function() {
+        document.querySelectorAll('.mg-option-card').forEach(function(card) {
+          card.addEventListener('click', function() {
+            var idx = parseInt(card.dataset.idx, 10);
+            var pick = shuffled[idx];
+            document.querySelectorAll('.mg-option-card').forEach(function(c) { c.style.pointerEvents = 'none'; });
+            card.classList.add('selected');
+            if (pick.correct) correctCount++;
+            var cls = pick.correct ? 'good' : 'bad';
+            var resDiv = document.getElementById('mg-result');
+            resDiv.className = 'mg-result ' + cls;
+            resDiv.innerHTML = '<p>' + (pick.correct ? '✓ ' : '✗ ') + pick.feedback + '</p>' +
+              '<div style="margin-top:14px;"><button class="mg-action-btn" id="mg-step-next">' +
+              (stepIdx < steps.length - 1 ? 'Next Step' : 'Finish') + '</button></div>';
+            document.getElementById('mg-step-next').addEventListener('click', function() {
+              stepIdx++;
+              if (stepIdx < steps.length) {
+                renderStep();
+              } else {
+                var stars = correctCount === steps.length ? 3 : correctCount >= steps.length - 1 ? 2 : correctCount >= 1 ? 1 : 0;
+                var msg = correctCount + ' of ' + steps.length + ' steps correct.';
+                eatFood(meal.carbs, 'slow');
+                doseInsulin(recommendedDose(meal.carbs, bg));
+                state.score.mealsManaged++;
+                onComplete({ stars: stars, summary: msg });
+              }
+            });
+          });
         });
-      });
-    }, 30);
+      }, 30);
+    }
+
+    renderStep();
   }
 };
 
@@ -3116,10 +3255,11 @@ addPassage('weekly-summary', {
 // 17. SETUP PASSAGES (Title, Name, Appearance, Devices, Difficulty, Companion)
 // ============================================
 
+const HATS = ['—','🧢','🧶','🎽','🎀'], FACES = ['😊','😎','🙂','😄','🤓'];
+const SHIRT_COLORS = ['#5b8fb9','#e85d4a','#4caf50','#ffc107','#9c27b0'];
+const SHOES = ['👟','🥾','🩴','👞','🥿'];
+
 function registerSetupPassages() {
-  const HATS = ['—','🧢','🧶','🎽','🎀'], FACES = ['😊','😎','🙂','😄','🤓'];
-  const SHIRT_COLORS = ['#5b8fb9','#e85d4a','#4caf50','#ffc107','#9c27b0'];
-  const SHOES = ['👟','🥾','🩴','👞','🥿'];
 
   addPassage('dedication', {
     noWrap: true,
