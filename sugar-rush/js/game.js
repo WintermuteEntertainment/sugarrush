@@ -3121,6 +3121,22 @@ function registerSetupPassages() {
   const SHIRT_COLORS = ['#5b8fb9','#e85d4a','#4caf50','#ffc107','#9c27b0'];
   const SHOES = ['👟','🥾','🩴','👞','🥿'];
 
+  addPassage('dedication', {
+    noWrap: true,
+    content: () => '<div class="title-screen" style="cursor:pointer;"><p style="font-style:italic;font-size:1.3em;color:#e0e0e0;">For Dr. Patricia Riley</p></div>',
+    onEnter: () => {
+      const advance = () => {
+        document.removeEventListener('keydown', advance);
+        document.getElementById('narrative')?.removeEventListener('click', advance);
+        renderPassage('title');
+      };
+      setTimeout(() => {
+        document.addEventListener('keydown', advance, { once: true });
+        document.getElementById('narrative')?.addEventListener('click', advance);
+      }, 100);
+    }
+  });
+
   addPassage('title', {
     noWrap: true,
     content: () => {
@@ -3577,7 +3593,7 @@ function init() {
   registerDay1Passages();
   registerLowBGRescuePassages();
   initHUD();
-  renderPassage('title');
+  renderPassage('dedication');
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
