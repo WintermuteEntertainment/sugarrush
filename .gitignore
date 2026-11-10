@@ -1,0 +1,14 @@
+# OS
+Thumbs.db
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# Node (in case a dev server gets added later)
+node_modules/
