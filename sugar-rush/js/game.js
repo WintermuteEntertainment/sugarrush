@@ -1886,13 +1886,13 @@ const miniGameSchedule = {
   3: { am: { name: 'Mealtime Routine',  desc: 'Walk through the steps you follow at every meal.' },
        pm: { name: 'Pack Your Bag',     desc: 'Pack everything you need for a day at school.' } },
   4: { am: { name: 'Portion Estimator', desc: 'Look at the plate and estimate the carbs.' },
-       pm: { name: 'Glucose Roller',    desc: 'A just-for-fun game: keep the ball in the green zone.' } },
+       pm: { name: 'Carb Catcher',      desc: 'Catch foods to keep your BG in the green zone while you play.' } },
   5: { am: { name: 'Label Reader',      desc: 'Crackers and soup are about all you can manage. Read the labels.' },
        pm: { name: 'Sick Day Protocol', desc: 'Step through what to do on a sick day.' } },
   6: { am: { name: 'Pack Your Bag',     desc: 'Pack for a Saturday out with friends.' },
        pm: { name: 'Exercise Balance',  desc: 'A long bike ride. Keep your BG in the green.' } },
   7: { am: { name: 'Mealtime Routine',  desc: 'Tricky meals: estimating, fatty foods, and knowing when to wait.' },
-       pm: { name: 'Glucose Roller',    desc: 'One more roll. See if it feels easier now.' } }
+       pm: { name: 'Carb Catcher',      desc: 'One more round of catching. Which foods have the most carbs?' } }
 };
 
 const miniGameBetaCells = {
@@ -1902,7 +1902,7 @@ const miniGameBetaCells = {
   'Label Reader':     'reading-labels',
   'Exercise Balance': 'adjusting-exercise',
   'Pack Your Bag':    'packing-trip',
-  'Glucose Roller':   'what-is-basal',
+  'Carb Catcher':     'what-are-carbs',
   'Portion Estimator':'portion-estimation',
   'Sick Day Protocol':'sick-day-management'
 };
@@ -2412,60 +2412,156 @@ MiniGames['Pack Your Bag'] = {
   }
 };
 
-// ---- Glucose Roller ----
-// Abstract "feel the momentum" game. The ball is BG; taps nudge it.
-MiniGames['Glucose Roller'] = {
-  intro: { emoji: '🎱', how: [
-    'This is a pretend game about how BG moves. The ball is your BG.',
-    'The ball drifts on its own, and once it starts moving it keeps going that way.',
-    'Tap <strong>⬆️ Up</strong> (like eating carbs) or <strong>⬇️ Down</strong> (like insulin working) to nudge it. Arrow keys work too.',
-    'Try to keep it in the green band (5 to 10). It lasts about 15 seconds.'] },
+// ---- Carb Catcher ----
+// Foods fall; you move to catch the ones you want. Each food raises BG by its real carb
+// amount (Health Canada values; drinks and fruit act faster). Being active pulls BG down.
+// Goal: stay in the green zone. Catching everything sends BG too high, so you choose.
+MiniGames['Carb Catcher'] = {
+  intro: { emoji: '🧺', how: [
+    'Foods fall from the top. Slide your basket left and right to catch the ones you want. Drag on the game, or use ◀ ▶ (arrow keys work too).',
+    'Each food shows its carbs. Catching it raises your BG by that much, so big-carb foods push it up a lot and low-carb foods hardly at all.',
+    'Being active slowly lowers your BG. When BG gets low, grab something with carbs. When it\'s high, let foods fall past.',
+    'Goal: stay in the green zone (5 to 10). Missing foods is fine. It lasts about 45 seconds.'] },
   play: function(opts, onComplete) {
-    let bg = 7.0, vel = 0, inGreen = 0, ticks = 0, done = false;
-    const MAX = 300, H = 280;
-    const y = v => ((18 - Math.max(2, Math.min(18, v))) / 16) * (H - 40) + 10;
-    renderMGPanel('<h2>🎱 Glucose Roller</h2><p class="mg-subtitle">Keep the ball in the green band.</p>' +
-      '<div class="roller-field" style="height:' + H + 'px"><div class="roller-green" style="top:' + y(10) + 'px;height:' + (y(5) - y(10)) + 'px"></div>' +
-      '<div class="roller-ball" id="mg-roller-ball">⚽</div></div>' +
-      '<div style="text-align:center;margin:8px 0;">BG <strong id="mg-roller-bg">7.0</strong></div>' +
-      '<div class="roller-btns"><button class="mg-action-btn big" id="mg-roller-up">⬆️ Up</button><button class="mg-action-btn big" id="mg-roller-down">⬇️ Down</button></div>' +
-      '<div class="roller-progress"><div id="mg-roller-prog"></div></div><div id="mg-result"></div>');
+    // Carbs: Health Canada, Nutrient Value of Some Common Foods (2008).
+    const FOODS = [
+      { e: '🧃', n: 'Apple juice ½ cup', c: 15, fast: true }, { e: '🍌', n: 'Banana', c: 27, fast: true },
+      { e: '🍊', n: 'Orange', c: 15, fast: true }, { e: '🍇', n: '20 grapes', c: 18, fast: true },
+      { e: '🍎', n: 'Apple', c: 19 }, { e: '🍓', n: '7 strawberries', c: 6 },
+      { e: '🥛', n: 'Milk, 1 cup', c: 12 }, { e: '🍐', n: 'Pear', c: 26 },
+      { e: '🍞', n: 'Slice of bread', c: 18 }, { e: '🍕', n: 'Slice of pizza', c: 25 },
+      { e: '🍚', n: 'Rice ½ cup', c: 24 }, { e: '🍪', n: '2 cookies', c: 13 },
+      { e: '🍿', n: 'Popcorn, 1 cup', c: 7 }, { e: '🧀', n: 'Cheese', c: 1 },
+      { e: '🥚', n: 'Egg', c: 1 }, { e: '🥦', n: 'Broccoli ½ cup', c: 6 }, { e: '🥕', n: 'Carrots ½ cup', c: 6 }
+    ];
+    const TOTAL = 45, TICK = 50, H = 320;
+    const PHASES = [
+      { until: 12, label: '🚶 Walking to the park', drift: 0.008 },
+      { until: 30, label: '⚽ Playing tag', drift: 0.016 },
+      { until: 45, label: '🛝 Playground', drift: 0.012 }
+    ];
+    let bg = Math.min(9, Math.max(5.5, state.bg.current));
+    let t = 0, x = 50, moveDir = 0, dragging = false, inGreen = 0, ticks = 0, done = false, paused = false;
+    const falling = [], absorbing = [], eaten = [];
+    let spawnIn = 0;
+    const pct = v => Math.max(0, Math.min(100, ((v - 2) / 16) * 100));
+
+    renderMGPanel('<h2>🧺 Carb Catcher</h2><p class="mg-subtitle" id="cc-phase">Get ready...</p>' +
+      '<div class="cc-wrap"><div class="cc-field" id="cc-field" style="height:' + H + 'px"><div class="cc-basket" id="cc-basket">🧺</div><div class="cc-pop" id="cc-pop"></div></div>' +
+      '<div class="cc-meter"><div class="cc-green" style="bottom:' + pct(5) + '%;height:' + (pct(10) - pct(5)) + '%"></div><div class="cc-marker" id="cc-marker"></div></div></div>' +
+      '<div class="cc-status">BG <strong id="cc-bg">' + bg.toFixed(1) + '</strong> <span id="cc-note"></span></div>' +
+      '<div class="roller-btns"><button class="mg-action-btn big" id="cc-left">◀</button><button class="mg-action-btn big" id="cc-right">▶</button></div>' +
+      '<div class="roller-progress"><div id="cc-prog"></div></div><div id="mg-result"></div>');
+
     setTimeout(() => {
-      const ball = document.getElementById('mg-roller-ball'), bgEl = document.getElementById('mg-roller-bg'), prog = document.getElementById('mg-roller-prog');
-      if (!ball) return;
-      const nudge = d => { if (!done) vel += d * 0.15; };
-      document.getElementById('mg-roller-up').addEventListener('click', () => nudge(1));
-      document.getElementById('mg-roller-down').addEventListener('click', () => nudge(-1));
-      const keys = e => {
-        if (done) return;
-        if (e.key === 'ArrowUp') { nudge(1); e.preventDefault(); }
-        if (e.key === 'ArrowDown') { nudge(-1); e.preventDefault(); }
+      const field = document.getElementById('cc-field');
+      if (!field) return;
+      const basket = document.getElementById('cc-basket'), marker = document.getElementById('cc-marker');
+      const bgEl = document.getElementById('cc-bg'), noteEl = document.getElementById('cc-note');
+      const phaseEl = document.getElementById('cc-phase'), prog = document.getElementById('cc-prog'), pop = document.getElementById('cc-pop');
+
+      const setFromPointer = e => {
+        const r = field.getBoundingClientRect();
+        x = Math.max(6, Math.min(94, ((e.clientX - r.left) / r.width) * 100));
       };
-      document.addEventListener('keydown', keys);
+      field.addEventListener('pointerdown', e => { dragging = true; field.setPointerCapture(e.pointerId); setFromPointer(e); });
+      field.addEventListener('pointermove', e => { if (dragging) setFromPointer(e); });
+      field.addEventListener('pointerup', () => { dragging = false; });
+      field.addEventListener('pointercancel', () => { dragging = false; });
+      const hold = (id, dir) => {
+        const b = document.getElementById(id);
+        b.addEventListener('pointerdown', e => { e.preventDefault(); moveDir = dir; });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => { if (moveDir === dir) moveDir = 0; }));
+      };
+      hold('cc-left', -1); hold('cc-right', 1);
+      const keyDown = e => { if (e.key === 'ArrowLeft') { moveDir = -1; e.preventDefault(); } if (e.key === 'ArrowRight') { moveDir = 1; e.preventDefault(); } };
+      const keyUp = e => { if ((e.key === 'ArrowLeft' && moveDir < 0) || (e.key === 'ArrowRight' && moveDir > 0)) moveDir = 0; };
+      document.addEventListener('keydown', keyDown);
+      document.addEventListener('keyup', keyUp);
+      const cleanup = () => { document.removeEventListener('keydown', keyDown); document.removeEventListener('keyup', keyUp); };
+
+      const showPop = (txt) => { pop.textContent = txt; pop.classList.remove('show'); void pop.offsetWidth; pop.classList.add('show'); };
+
       const loop = setInterval(() => {
-        if (!document.getElementById('mg-roller-ball')) { clearInterval(loop); document.removeEventListener('keydown', keys); return; }
+        if (!document.getElementById('cc-field')) { clearInterval(loop); cleanup(); return; }
+        if (done || paused) return;
         ticks++;
-        vel += (Math.random() - 0.52) * 0.06;
-        vel *= 0.97;
-        bg = Math.max(2, Math.min(18, bg + vel * 0.1));
+        t = ticks * TICK / 1000;
+        const ph = PHASES.find(p => t < p.until) || PHASES[2];
+        phaseEl.textContent = ph.label;
+        x = Math.max(6, Math.min(94, x + moveDir * 2.2));
+        basket.style.left = x + '%';
+
+        // Being active lowers BG; food that was caught raises it over a second or few.
+        bg -= ph.drift;
+        for (const a of absorbing) {
+          const step = Math.min(a.left, a.rate);
+          bg += step; a.left -= step;
+        }
+        for (let i = absorbing.length - 1; i >= 0; i--) if (absorbing[i].left <= 0.0001) absorbing.splice(i, 1);
+
+        // Spawn foods: a mix, with low-carb foods common enough to matter.
+        spawnIn -= TICK;
+        if (spawnIn <= 0) {
+          spawnIn = 1300 + Math.random() * 700;
+          const f = pick(FOODS);
+          const el = document.createElement('div');
+          el.className = 'cc-food';
+          el.innerHTML = '<span>' + f.e + '</span><small>' + f.c + 'g</small>';
+          const fx = 8 + Math.random() * 84;
+          el.style.left = fx + '%';
+          field.appendChild(el);
+          falling.push({ f, el, x: fx, y: -10, v: 0.75 + Math.random() * 0.35 });
+        }
+        for (let i = falling.length - 1; i >= 0; i--) {
+          const o = falling[i];
+          o.y += o.v;
+          o.el.style.top = o.y + '%';
+          if (o.y >= 80 && o.y <= 92 && Math.abs(o.x - x) < 10) {
+            const rise = o.f.c * 0.1;
+            absorbing.push({ left: rise, rate: rise / ((o.f.fast ? 1.2 : 3) * 1000 / TICK) });
+            eaten.push(o.f);
+            showPop(o.f.e + ' +' + o.f.c + 'g');
+            o.el.remove(); falling.splice(i, 1);
+          } else if (o.y > 100) { o.el.remove(); falling.splice(i, 1); }
+        }
+
         if (inRange(bg)) inGreen++;
-        ball.style.top = (y(bg) - 14) + 'px';
         bgEl.textContent = bg.toFixed(1);
         bgEl.style.color = inRange(bg) ? 'var(--zone-green)' : (bg < 4 || bg > 14) ? 'var(--zone-red)' : '#d39e00';
-        prog.style.width = (ticks / MAX * 100) + '%';
-        if (ticks >= MAX) {
-          done = true; clearInterval(loop); document.removeEventListener('keydown', keys);
-          const p = Math.round(inGreen / ticks * 100);
-          mgFinish('<p><strong>' + (p >= 70 ? 'Smooth rolling!' : p >= 40 ? 'Nice work!' : 'That ball has a mind of its own!') + '</strong> The ball was in the green ' + p + '% of the time.</p>' +
-            '<p><small>💡 In this game, small early nudges work better than big late ones.</small></p>',
-            () => onComplete({ stars: p >= 70 ? 3 : p >= 40 ? 2 : 1, summary: p + '%' }), '🎱');
+        marker.style.bottom = pct(bg) + '%';
+        noteEl.textContent = bg > 12 ? 'Lots of carbs coming in. Let some foods fall past.' : bg < 5.5 ? 'Getting low. Catch something with carbs!' : '';
+        prog.style.width = Math.min(100, t / TOTAL * 100) + '%';
+
+        if (bg < 4) {
+          paused = true;
+          noteEl.textContent = '⏸️ Under 4: you stop and have glucose tablets.';
+          let k = 0;
+          const rec = setInterval(() => {
+            bg += 0.2; k++; bgEl.textContent = bg.toFixed(1); marker.style.bottom = pct(bg) + '%';
+            if (k >= 8) { clearInterval(rec); paused = false; }
+          }, 250);
         }
-      }, 50);
+        if (t >= TOTAL) finish();
+      }, TICK);
+
+      function finish() {
+        done = true; clearInterval(loop); cleanup();
+        falling.forEach(o => o.el.remove());
+        const p = Math.round(inGreen / ticks * 100);
+        const total = eaten.reduce((a, f) => a + f.c, 0);
+        const sorted = eaten.slice().sort((a, b) => b.c - a.c);
+        const big = sorted[0], small = sorted[sorted.length - 1];
+        let msg = '<p><strong>' + (p >= 70 ? 'Great balance!' : p >= 40 ? 'Nice work!' : 'That was a wild ride!') + '</strong> You were in the green zone ' + p + '% of the time.</p>' +
+          '<p><small>You caught ' + eaten.length + ' food' + (eaten.length === 1 ? '' : 's') + ' with about ' + total + ' g of carbs.' +
+          (big && small && big !== small ? ' Biggest: ' + big.e + ' ' + big.n + ' (' + big.c + ' g). Smallest: ' + small.e + ' ' + small.n + ' (' + small.c + ' g).' : '') + '</small></p>' +
+          '<p><small>💡 Foods like cheese, eggs and most vegetables have little carbohydrate (Diabetes Canada). Carb values: Health Canada.</small></p>';
+        mgFinish(msg, () => onComplete({ stars: p >= 70 ? 3 : p >= 40 ? 2 : 1, summary: p + '%' }), '🧺');
+      }
     }, 50);
   }
 };
 
-// ---- Portion Estimator ----
 MiniGames['Portion Estimator'] = {
   intro: { emoji: '👁️', how: [
     'You\'ll see a plate of food. Slide to estimate the total carbs.',
@@ -2842,7 +2938,7 @@ function registerBedtimeCheck(day, passageId, nextPassage) {
   addPassage(passageId, {
     content: (s) => '<h2>Last Check</h2><p>BG: <strong>' + s.bg.current.toFixed(1) + '</strong>: ' + getBGZone(s.bg.current).label + '</p>' +
       '<p><strong>' + s.companion.name + ':</strong> "' + (inRange(s.bg.current) ? 'Looking good for bedtime.' : 'Not perfect, and that\'s okay. Your plan has you covered tonight.') + '"</p>',
-    onEnter: () => { tick(0.5); },
+    onEnter: () => { tick(0.5); if (collectBetaCell('what-is-basal')) setTimeout(() => showBetaCellNotification(betaCellMap['what-is-basal'].name, 'blue'), 500); },
     next: nextPassage, continueText: '😴 Go to sleep'
   });
 }

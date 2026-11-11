@@ -12,7 +12,7 @@ Tim found the game "almost unplayable" on iPad. Tested in an emulated iPad (768�
 - **Top bar:** on tablets and phones the labels turn into icons (⚡ energy, 💪 confidence, 🧬 Beta Cells) and the bar fits in one row (was three rows on a phone). The day shows as "Wed" on phones.
 - **Pip covering buttons:** the story area has extra space at the bottom so buttons can scroll clear of Pip. Pip and his bubble are smaller on phones, the bubble disappears faster there, and tapping it dismisses it.
 - **Screen height:** uses `100dvh`, so Safari's toolbars can't hide the bottom of the game. Notch and home-bar areas are padded (`viewport-fit=cover` + `safe-area-inset`).
-- **Double-tap zoom:** off on every control (`touch-action: manipulation`). On iPad, tapping Up/Down quickly in Glucose Roller or Snack in Exercise Balance zoomed the page instead. This is a likely cause of Tim's "Roller doesn't work at all" note.
+- **Double-tap zoom:** off on every control (`touch-action: manipulation`). On iPad, rapid taps (Exercise Balance's Snack, the old Roller's Up/Down) zoomed the page instead.
 - **Sticky hover effects** removed on touch screens and replaced with a short press effect. Long-press no longer selects text on controls.
 - **Typing:** inputs use 16 px+ text (iOS zooms in on anything smaller). Answer boxes bring up the number keypad. Label Reader no longer pops the keyboard over the label on touch screens.
 - **Phone layouts:** smaller padding and headings, 2-column mini-game grids, stacked device/pace choices, sticky avatar preview during character creation, smaller plates and emoji scenes, Beta Cell pop-ups moved to the bottom.
@@ -20,7 +20,7 @@ Tim found the game "almost unplayable" on iPad. Tested in an emulated iPad (768�
 - **Home Screen:** Apple and Android meta tags so "Add to Home Screen" opens the game full screen without Safari's bars. There's no app icon file yet (iOS uses a screenshot of the page).
 - Two unsourced Pip lines found while testing were replaced with Health Canada numbers (yogurt, spaghetti).
 
-**How to test on a real device:** the dev server is only on this PC. Either deploy (section 10) or, with the phone or iPad on the same Wi-Fi, run the server and open `http://<this PC's local IP>:3000` (http-server prints the address). Things to try: Glucose Roller rapid taps, Exercise Balance, typing in Label Reader/Carb Counter, rotating the device mid-game, Add to Home Screen, and the Back swipe gesture (it should show the "your game is saved" message).
+**How to test on a real device:** the dev server is only on this PC. Either deploy (section 10) or, with the phone or iPad on the same Wi-Fi, run the server and open `http://<this PC's local IP>:3000` (http-server prints the address). Things to try: dragging in Carb Catcher, Exercise Balance, typing in Label Reader/Carb Counter, rotating the device mid-game, Add to Home Screen, and the Back swipe gesture (it should show the "your game is saved" message).
 
 **Code:** CSS block "v0.3: touch screens, tablets and phones" at the end of the `<style>` in index.html. JS: `updateHUD` (short day name), `initHUD` (bubble tap, resize), `showCompanion` (shorter bubble on phones), `inputmode` on number inputs, Label Reader focus.
 
@@ -106,7 +106,7 @@ Open http://localhost:3000. (`.claude/launch.json` has the same config as `sugar
 | Label Reader | Wrong answers get a hint and up to 3 tries. "Dosing" wording removed. |
 | Exercise Balance | Rewritten: 60 game-minutes in ~24 s, warm-up/main/cool-down. One snack at a time with digestion delay (no spamming). Under 4 pauses for a treatment instead of ending. Result coaches balance (ending high after many snacks is called out). BG now carries back to the main game. Also used as Thursday's soccer practice. |
 | Pack Your Bag | Done only finishes when essentials are packed; otherwise a hint. Fun items are fine. |
-| Glucose Roller | Explained on its start screen, green band 5-10, keyboard listener cleaned up. |
+| Carb Catcher | **Replaced Glucose Roller (2026-11-11).** Foods fall; drag the basket (or ◀ ▶ / arrow keys) to catch the ones you want. Each food raises BG by its Health Canada carb value (drinks and fruit act faster); being active lowers BG. Stay in 5-10. About 27 foods fall in 45 s and roughly 6-10 is enough, so the player has to choose. Under 4 pauses for glucose tablets. Awards the "What are Carbs?" Beta Cell; "What is Basal Insulin?" moved to the bedtime check. |
 | Portion Estimator | More plates, no pop. |
 | Sick Day Protocol | Re-pickable steps. Insulin is "your sick day plan"; focus on telling a grown-up, ketones, fluids, when to get help. |
 
@@ -121,7 +121,7 @@ Open http://localhost:3000. (`.claude/launch.json` has the same config as `sugar
 ## 6. Tim's open notes (verbatim, 2026-11-10)
 
 - "Glucose Roller" game doesn't work at all.
-  - *Claude, same day:* in the current build the Roller starts, the ball moves, buttons and arrow keys respond, and it finishes (tested via `SugarRush.playMiniGame('Glucose Roller', {tier:2}, 'title')`). Tim may have played the v0.1 build or hit it mid-edit. **Needs Tim's repro steps.** It may also mean "doesn't work as a game" (the nudges are subtle and it isn't much fun); if so, it needs a redesign.
+  - *Resolved 2026-11-11:* Tim meant the design (it taught nothing and wasn't fun). Replaced with **Carb Catcher** (see the mini-game table).
 - Snack/Exercise game still needs work too.
   - *Claude:* the Exercise Balance rewrite landed after Tim's test, but treat this as open. Ideas: snack choices with different speeds (fast vs slow carbs), a visible "digesting" bar, clearer goal line.
 

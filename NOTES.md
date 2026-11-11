@@ -2,6 +2,10 @@
 
 **Last updated:** 2026-11-10 (see HANDOFF.md for full status)
 
+## Session Log (2026-11-11): Carb Catcher
+
+- Tim: the Roller "doesn't actually teach much... isn't actually very fun". Replaced with Carb Catcher: catch falling foods (Health Canada carb values) to keep BG in range while activity lowers it. Drag, buttons or arrow keys. Balance-tested with an auto-player (93% in range catching 10 of ~27 foods).
+
 ## Session Log (2026-11-11): v0.3 touch/mobile
 
 - Tim: "On the iPad right now it's almost unplayable"; phones expected similar. Optimize for iOS and Android.
