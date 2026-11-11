@@ -188,11 +188,11 @@ The Canada's Food Guide site (food-guide.canada.ca) currently shows a "page move
   - **Web server:** scheduled task `SugarRush` (at boot +45 s, user twwca, runs without login): `python.exe -m http.server 8795 --bind 127.0.0.1 --directory A:\sugarrush\sugar-rush`.
   - **Tunnel:** its own tunnel `sugarrush` (ID `dd6752e3-4663-4f70-8190-e15eaee503b8`), config `C:\Users\twwca\.cloudflared\sugarrush.yml`, scheduled task `SugarRushTunnel` (at boot +1 min). DNS: CNAME sugarrush.timcase.ca → that tunnel. The jazz and breaktracker configs were not changed.
   - **Gotcha:** `cloudflared tunnel route dns <name> ...` on BBB uses the tunnel named in the default `config.yml` (jazz) unless you pass `--config <that tunnel's yml>`. It first routed sugarrush to jazz; fixed with `cloudflared tunnel --config ...\sugarrush.yml route dns --overwrite-dns dd6752e3-... sugarrush.timcase.ca`.
-  - **Updating the live game:** BBB's GitHub login has expired (`gh auth status`: "token ... is invalid"). Run `gh auth login` on BBB once; after that, to update:
+  - **Updating the live game:** push from this PC, then:
     ```bash
     ssh bbb "cd /mnt/a/sugarrush && git pull"
     ```
-    No restart needed (static files). Until BBB can pull, copy from this PC instead: `cd D:/Repos/sugarrush && tar -cf - sugar-rush | ssh bbb "tar -xf - -C /mnt/a/sugarrush"`.
+    No restart needed (static files). BBB pulls with a **read-only deploy key** (`~/.ssh/sugarrush_deploy` in BBB's WSL, added 2026-11-11 as "BBB (read-only)" in the repo's Settings → Deploy keys; revoke it there). Windows' own GitHub login can't be used over SSH, because Credential Manager isn't readable from an SSH session.
   - Unrelated things noticed on BBB: the main `config.yml` still routes breaks.timcase.ca to port 47231 (dead; harmless, since the breaktracker tunnel serves it). cloudflared 2026.3.0 says 2026.10.7 is available. The `Cloudflared` Windows service is stopped; tunnels run from scheduled tasks.
 - Future domain idea: sugarrush.ca (check availability).
 
