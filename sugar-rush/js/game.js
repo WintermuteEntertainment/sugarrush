@@ -471,6 +471,10 @@ function initHUD() {
   document.getElementById('hud-collectibles').addEventListener('click', openJournal);
   document.getElementById('hud-menu')?.addEventListener('click', openMenu);
   document.getElementById('companion-face')?.addEventListener('click', pipHint);
+  // Tap the speech bubble to dismiss it (it can sit over content on small screens).
+  document.getElementById('companion-bubble')?.addEventListener('click', hideCompanion);
+  // Rotating a phone or tablet: refresh the HUD and drop any tip pointing at the old layout.
+  window.addEventListener('resize', () => { if (tipOpen) closeTip(); notify(); });
 }
 function showHUD() {
   hud.el.classList.remove('hidden');
@@ -497,7 +501,7 @@ function updateHUD() {
   hud.bgFill.style.backgroundColor = colorVar;
   hud.energyFill.style.width = state.energy + '%';
   hud.confidenceValue.textContent = state.confidence;
-  hud.day.textContent = dayName(state.time.day).slice(0, 3) + ' · Day ' + state.time.day;
+  hud.day.textContent = window.innerWidth <= 600 ? dayName(state.time.day).slice(0, 3) : dayName(state.time.day).slice(0, 3) + ' · Day ' + state.time.day;
   const h = Math.floor(state.time.hour), m = Math.round((state.time.hour - h) * 60) % 60;
   const period = h >= 12 ? 'PM' : 'AM', dh = h > 12 ? h - 12 : (h === 0 ? 12 : h);
   hud.clock.textContent = dh + ':' + String(m).padStart(2, '0') + ' ' + period;
@@ -572,7 +576,9 @@ function showCompanion(text, dur) {
   }
   // AUDIO: Play companion dialogue blip
   if (companionTimeout) clearTimeout(companionTimeout);
-  companionTimeout = setTimeout(() => bubble.classList.add('hidden'), dur > 0 ? dur : 7000);
+  let ms = dur > 0 ? dur : 7000;
+  if (window.innerWidth <= 600) ms = Math.min(ms, 4500);
+  companionTimeout = setTimeout(() => bubble.classList.add('hidden'), ms);
 }
 function hideCompanion() { document.getElementById('companion-bubble').classList.add('hidden'); }
 
@@ -1183,7 +1189,7 @@ registerMealEvent('not-hungry', 'Eating When You Don\'t Want To', 3, {
 // More Tier 1 meals
 registerMealEvent('yogurt-bowl', 'Yogurt Bowl', 1, {
   scene: 'A yogurt bowl with toppings set out on the counter.',
-  companionIntro: "Plain yogurt has some carbs from milk sugar, and the toppings add more.",
+  companionIntro: "¾ cup of plain yogurt has about 13 g of carbs. The toppings add more.",
   foods: [
     { name: 'Yogurt + granola + blueberries', carbs: 47, desc: '¾ cup plain yogurt (13 g) + ¼ cup granola (23 g) + ½ cup blueberries (11 g).', speed: 'slow' },
     { name: 'Yogurt + blueberries', carbs: 24, desc: '¾ cup plain yogurt (13 g) + ½ cup blueberries (11 g).', speed: 'slow' },
@@ -1223,7 +1229,7 @@ registerMealEvent('movie-snacks', 'Movie Theater', 2, {
 
 registerMealEvent('pasta-night', 'Pasta Night', 2, {
   scene: 'Spaghetti with meat sauce. Easy dinner. Hard carbs to count.',
-  companionIntro: "Pasta is one of the trickiest things \u2014 portion size deceives everyone.",
+  companionIntro: "One cup of cooked spaghetti has about 42 g of carbs. Portions are easy to misjudge.",
   foods: [
     { name: 'Big plate (2 cups)', carbs: 84, desc: '2 cups cooked spaghetti (84 g).', speed: 'slow' },
     { name: 'Normal plate (1 cup)', carbs: 42, desc: '1 cup cooked spaghetti (42 g).', speed: 'slow' },
@@ -2011,7 +2017,7 @@ MiniGames['Carb Counter'] = {
         '<div><strong>🥛 Milk</strong><br>1 cup milk 12 g<br>¾ cup plain yogurt 13 g<br>Cheese about 1 g</div>' +
         '<div><strong>🥦 Veggies &amp; protein</strong><br>½ cup carrots or broccoli 6 g<br>Meat, eggs: little carbohydrate<br>¾ cup beans 29 g</div>' +
       '</div><p class="src-note">Source: Health Canada, Nutrient Value of Some Common Foods.</p></details>' +
-      '<div class="mg-estimate-row"><label for="mg-carb-input">Total carbs:</label><input type="number" id="mg-carb-input" placeholder="0" min="0" max="300"><span>g</span><button class="mg-action-btn" id="mg-submit">Check</button></div>' +
+      '<div class="mg-estimate-row"><label for="mg-carb-input">Total carbs:</label><input type="number" id="mg-carb-input" inputmode="numeric" pattern="[0-9]*" placeholder="0" min="0" max="300"><span>g</span><button class="mg-action-btn" id="mg-submit">Check</button></div>' +
       '<div id="mg-result"></div>');
     setTimeout(() => {
       const input = document.getElementById('mg-carb-input');
@@ -2207,7 +2213,7 @@ MiniGames['Label Reader'] = {
       let misses = 0;
       const box = document.getElementById('mg-question');
       box.innerHTML = '<p class="step-q"><strong>' + (qi + 1) + ' of ' + qs.length + ':</strong> ' + qd.q + '</p>' +
-        '<div class="mg-estimate-row"><input type="number" id="mg-label-input" placeholder="0" min="0" max="9999"><span>' + qd.unit + '</span><button class="mg-action-btn" id="mg-label-submit">Answer</button></div>' +
+        '<div class="mg-estimate-row"><input type="number" id="mg-label-input" inputmode="numeric" pattern="[0-9]*" placeholder="0" min="0" max="9999"><span>' + qd.unit + '</span><button class="mg-action-btn" id="mg-label-submit">Answer</button></div>' +
         '<div id="mg-q-feedback"></div>';
       const input = document.getElementById('mg-label-input');
       const next = () => { qi++; if (qi < qs.length) showQ(); else { box.innerHTML = ''; mgFinish('<p><strong>Label master!</strong> Serving size first, then carbohydrate, then fibre.</p>', () => onComplete({ stars: firstTry === qs.length ? 3 : 2, summary: 'Label read' }), '🏷️'); } };
@@ -2234,7 +2240,8 @@ MiniGames['Label Reader'] = {
       };
       document.getElementById('mg-label-submit').addEventListener('click', submit);
       input.addEventListener('keypress', e => { if (e.key === 'Enter') submit(); });
-      input.focus();
+      // On touch screens, don't pop the keyboard over the label before the player has read it.
+      if (window.matchMedia('(hover: hover)').matches) input.focus();
     }
     setTimeout(showQ, 30);
   }

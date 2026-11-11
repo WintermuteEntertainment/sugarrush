@@ -2,6 +2,13 @@
 
 **Last updated:** 2026-11-10 (see HANDOFF.md for full status)
 
+## Session Log (2026-11-11): v0.3 touch/mobile
+
+- Tim: "On the iPad right now it's almost unplayable"; phones expected similar. Optimize for iOS and Android.
+- Emulated iPad, phone and sideways phone. Found: 3-row top bar on phones, Pip covering choices, cramped padding.
+- Added a responsive + touch CSS layer, 100dvh, safe areas, no double-tap zoom, no sticky hover, 16 px inputs, numeric keypads, Home Screen meta tags. Details in HANDOFF.md section 0.
+- Not yet tested on real devices. Glucose Roller "doesn't work" may have been iPad double-tap zoom.
+
 ## Session Log (2026-11-10, part 3): fact check + meal slots
 
 - Tim: meals ignoring time of day "not acceptable"; all facts must come from Diabetes Canada or Health Canada, and should have been gathered first as a reference.

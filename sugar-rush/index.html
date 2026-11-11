@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Sugar Rush">
+  <meta name="theme-color" content="#16213e">
+  <meta name="format-detection" content="telephone=no">
   <title>Sugar Rush</title>
   <style>
 /* ============================================
@@ -645,6 +651,145 @@ body[data-bg="low"] #hud-bg-value, body[data-bg="severe-low"] #hud-bg-value, bod
   .scene-big { font-size: 36px; }
 }
 .src-note { font-size: 12px; color: var(--text-secondary); font-style: italic; margin: 6px 0; }
+
+/* ============================================
+   v0.3: touch screens, tablets and phones
+   ============================================ */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html, body { overscroll-behavior: none; }
+/* dvh = the height actually visible, so Safari's toolbars can't hide the bottom of the game */
+#game { height: 100vh; height: 100dvh; }
+#narrative { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-bottom: 120px; }
+
+/* No double-tap zoom, no grey tap flash, no text selection when tapping controls */
+button, .choice-btn, .quiz-option, .mg-option-card, .option-pick, .device-option, .difficulty-option,
+.slot-card, #companion-face, #companion-bubble, #hud-collectibles, .journal-cell, .journal-tab, summary,
+input[type="range"], .title-screen, .tip-bubble, #modal-overlay {
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+button, .choice-btn, .quiz-option, .mg-option-card, .option-pick, .device-option, .difficulty-option,
+#companion-face, #hud, .scene-art, .plate, .ex-track, .roller-field {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+/* iOS zooms the page when a focused input's text is under 16px */
+input, select, textarea { font-size: 16px; }
+.mg-estimate-row input { font-size: 22px; }
+input[type="range"] { height: 36px; }
+#companion-bubble { cursor: pointer; }
+
+/* Notch / home-bar safe areas */
+#hud {
+  height: auto; min-height: var(--hud-height);
+  padding-top: calc(8px + env(safe-area-inset-top));
+  padding-left: calc(20px + env(safe-area-inset-left));
+  padding-right: calc(20px + env(safe-area-inset-right));
+}
+#companion { bottom: calc(16px + env(safe-area-inset-bottom)); left: calc(16px + env(safe-area-inset-left)); }
+#journal-overlay { padding-top: calc(24px + env(safe-area-inset-top)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+
+.lbl-short { display: none; }
+
+/* Touch screens: no sticky hover effects; a quick press effect instead */
+@media (hover: none) {
+  .choice-btn:hover { background: var(--accent); transform: none; }
+  .continue-btn:hover { background: var(--accent); }
+  .mg-action-btn:hover { background: var(--accent-warm); transform: none; }
+  .title-screen .start-btn:hover { background: var(--accent-warm); transform: none; }
+  .option-pick:hover, #companion-face:hover, #journal-overlay .journal-cell:hover { transform: none; }
+  .option-pick:not(.selected):hover { border-color: var(--border); }
+  .quiz-option:not(.picked):hover { border-color: var(--border); transform: none; }
+  .mg-option-card:not(.selected):not(.packed):hover { border-color: var(--border); transform: none; }
+  .choice-btn:active, .continue-btn:active, .mg-action-btn:active, .quiz-option:active,
+  .mg-option-card:active, .option-pick:active, .modal-btn:active, .start-btn:active { transform: scale(0.96); filter: brightness(0.92); }
+}
+
+/* Tablets and small laptops */
+@media (max-width: 900px) {
+  #hud { flex-wrap: wrap; justify-content: space-around; gap: 6px 14px; font-size: 13px;
+         padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
+  .lbl-long { display: none; }
+  .lbl-short { display: inline; font-size: 17px; }
+  #hud-bg-bar, #hud-energy-bar { width: 56px; }
+  #hud-collectibles { flex-direction: row-reverse; }
+}
+
+/* Phones */
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  #hud { flex-wrap: nowrap; justify-content: space-between; gap: 6px; font-size: 12px; min-height: 48px;
+         padding: calc(6px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 6px calc(8px + env(safe-area-inset-left)); }
+  #hud > div { gap: 4px; }
+  #hud-avatar-name, #hud-bg-label, #hud-bg-bar { display: none; }
+  #hud-avatar-figure .av-hat { font-size: 10px; height: 11px; }
+  #hud-avatar-figure .av-face { font-size: 15px; }
+  #hud-avatar-figure .av-shirt { width: 16px; height: 10px; }
+  #hud-avatar-figure .av-shoes { font-size: 8px; height: 9px; }
+  #hud-bg-value { font-size: 20px; min-width: 0; }
+  #hud-bg-trend { font-size: 15px; min-width: 0; }
+  #hud-energy-bar { width: 34px; }
+  .lbl-short { font-size: 15px; }
+  #hud-confidence-value { font-size: 15px; }
+  #hud-time { flex-direction: column; gap: 0 !important; line-height: 1.15; text-align: center; }
+  #hud-clock { font-size: 11px; }
+  #hud-beta-cells { font-size: 12px; }
+  #hud-menu { width: 32px; height: 30px; font-size: 16px; flex-shrink: 0; }
+
+  #narrative { padding: 10px 8px 130px; }
+  .passage, .creation-panel, .summary-panel, .minigame-panel { padding: 18px 16px; border-radius: 10px; }
+  .passage h2, .minigame-panel h2, .creation-panel h2, .summary-panel h2 { font-size: 20px; }
+  .choice-btn { padding: 14px 16px; }
+  .scene-art { padding: 10px 6px; }
+  .scene-big { font-size: 34px; letter-spacing: 3px; }
+  .scene-row { font-size: 22px; letter-spacing: 2px; }
+  .food-emoji { font-size: 26px; width: 32px; }
+
+  .title-screen { padding: 40px 10px; }
+  .title-screen h1 { font-size: 40px; }
+  .title-art { font-size: 26px; letter-spacing: 4px; }
+  .device-choice, .difficulty-choice { flex-direction: column; }
+  .appearance-layout { flex-direction: column; align-items: stretch; gap: 12px; }
+  .doll-preview { padding: 8px; position: sticky; top: 0; z-index: 2; box-shadow: 0 4px 10px rgba(0,0,0,0.12); }
+  .avatar-doll.big .d-hat { font-size: 36px; height: 40px; }
+  .avatar-doll.big .d-face { font-size: 56px; }
+  .avatar-doll.big .d-shirt { width: 64px; height: 46px; }
+  .avatar-doll.big .d-shoes { font-size: 28px; }
+  .option-picker { gap: 8px; }
+  .option-pick { width: 50px; height: 50px; font-size: 24px; }
+  .slot-card { flex-wrap: wrap; gap: 10px; }
+  .slot-btns { width: 100%; justify-content: flex-end; }
+
+  .mg-estimate-row { flex-wrap: wrap; gap: 8px; padding: 12px; }
+  .mg-options-grid { grid-template-columns: repeat(2, 1fr); }
+  .mg-legend-grid { grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; }
+  .plate { width: 170px; height: 170px; font-size: 32px; }
+  .plate.big { width: 220px; height: 220px; }
+  .plate-item span { font-size: 30px; }
+  .mg-how { padding-left: 18px; }
+  .roller-btns .mg-action-btn { flex: 1; }
+  .ex-bg strong { font-size: 24px; }
+
+  #companion { gap: 6px; }
+  #companion-face { width: 48px; height: 48px; border-radius: 12px; }
+  #pip-visor { width: 32px; height: 20px; }
+  #pip-eyes { gap: 8px; }
+  #companion-bubble { max-width: calc(100vw - 90px); font-size: 14px; padding: 9px 12px; }
+  .beta-cell-notification { top: auto; right: 10px; left: 72px; bottom: calc(76px + env(safe-area-inset-bottom)); font-size: 14px; }
+  .modal-box { padding: 18px; }
+  .modal-btn { flex: 1 1 auto; }
+  .tip-bubble { padding: 12px; }
+}
+
+/* Phones turned sideways: very little height, so keep the top bar and Pip small */
+@media (max-height: 500px) and (orientation: landscape) {
+  #hud { flex-wrap: nowrap; min-height: 40px; padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: 4px; }
+  .lbl-long { display: none; }
+  .lbl-short { display: inline; }
+  #narrative { padding-top: 8px; padding-bottom: 90px; }
+  #companion-face { width: 42px; height: 42px; }
+  .scene-art { padding: 6px; }
+  .scene-big { font-size: 28px; }
+  .scene-row { font-size: 18px; }
+}
   </style>
 </head>
 <body>
@@ -666,11 +811,11 @@ body[data-bg="low"] #hud-bg-value, body[data-bg="severe-low"] #hud-bg-value, bod
         <div id="hud-bg-bar"><div id="hud-bg-fill"></div></div>
       </div>
       <div id="hud-energy">
-        <span id="hud-energy-label">Energy</span>
+        <span id="hud-energy-label"><span class="lbl-long">Energy</span><span class="lbl-short" title="Energy">⚡</span></span>
         <div id="hud-energy-bar"><div id="hud-energy-fill"></div></div>
       </div>
       <div id="hud-confidence">
-        <span id="hud-confidence-label">Confidence</span>
+        <span id="hud-confidence-label"><span class="lbl-long">Confidence</span><span class="lbl-short" title="Confidence">💪</span></span>
         <span id="hud-confidence-value">50</span>
       </div>
       <div id="hud-time">
@@ -679,7 +824,7 @@ body[data-bg="low"] #hud-bg-value, body[data-bg="severe-low"] #hud-bg-value, bod
       </div>
       <div id="hud-collectibles">
         <span id="hud-beta-cells">0 / 48</span>
-        <span id="hud-beta-label">Beta Cells</span>
+        <span id="hud-beta-label"><span class="lbl-long">Beta Cells</span><span class="lbl-short" title="Beta Cells">🧬</span></span>
       </div>
       <button id="hud-menu" title="Menu and saving">☰</button>
     </header>

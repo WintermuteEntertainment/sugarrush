@@ -1,8 +1,28 @@
 # Sugar Rush - Project Handoff
 
-**Last updated:** 2026-11-10
-**Version:** v0.2 (in progress). v0.1 backup: `backup/v0.1-2026-11-10/`
-**Status:** Full 7-day week plays end to end with no crashes (automated playthrough Tue-Sun plus a manual Day 1, 2026-11-10). Mechanics overhaul done. Facts checked against Diabetes Canada and Health Canada (section 8). Movable avatar and overlay/tracking system are NOT started.
+**Last updated:** 2026-11-11
+**Version:** v0.3 (touch screens, tablets, phones). v0.1 backup: `backup/v0.1-2026-11-10/`
+**Status:** Full 7-day week plays end to end with no crashes (automated playthrough Tue-Sun plus a manual Day 1, 2026-11-10). Mechanics overhaul done. Facts checked against Diabetes Canada and Health Canada (section 8). Layout and touch support for iPad and phones done (section 5b), but **not yet tested on a real iPhone, iPad or Android device**. Movable avatar and overlay/tracking system are NOT started.
+
+## 0. v0.3 (2026-11-11): touch screens, tablets and phones
+
+Tim found the game "almost unplayable" on iPad. Tested in an emulated iPad (768×1024), phone (375×812) and sideways phone (812×375); it has not been tried on real hardware yet.
+
+**Fixed**
+- **Top bar:** on tablets and phones the labels turn into icons (⚡ energy, 💪 confidence, 🧬 Beta Cells) and the bar fits in one row (was three rows on a phone). The day shows as "Wed" on phones.
+- **Pip covering buttons:** the story area has extra space at the bottom so buttons can scroll clear of Pip. Pip and his bubble are smaller on phones, the bubble disappears faster there, and tapping it dismisses it.
+- **Screen height:** uses `100dvh`, so Safari's toolbars can't hide the bottom of the game. Notch and home-bar areas are padded (`viewport-fit=cover` + `safe-area-inset`).
+- **Double-tap zoom:** off on every control (`touch-action: manipulation`). On iPad, tapping Up/Down quickly in Glucose Roller or Snack in Exercise Balance zoomed the page instead. This is a likely cause of Tim's "Roller doesn't work at all" note.
+- **Sticky hover effects** removed on touch screens and replaced with a short press effect. Long-press no longer selects text on controls.
+- **Typing:** inputs use 16 px+ text (iOS zooms in on anything smaller). Answer boxes bring up the number keypad. Label Reader no longer pops the keyboard over the label on touch screens.
+- **Phone layouts:** smaller padding and headings, 2-column mini-game grids, stacked device/pace choices, sticky avatar preview during character creation, smaller plates and emoji scenes, Beta Cell pop-ups moved to the bottom.
+- **Sideways phones:** compact bar and smaller Pip.
+- **Home Screen:** Apple and Android meta tags so "Add to Home Screen" opens the game full screen without Safari's bars. There's no app icon file yet (iOS uses a screenshot of the page).
+- Two unsourced Pip lines found while testing were replaced with Health Canada numbers (yogurt, spaghetti).
+
+**How to test on a real device:** the dev server is only on this PC. Either deploy (section 10) or, with the phone or iPad on the same Wi-Fi, run the server and open `http://<this PC's local IP>:3000` (http-server prints the address). Things to try: Glucose Roller rapid taps, Exercise Balance, typing in Label Reader/Carb Counter, rotating the device mid-game, Add to Home Screen, and the Back swipe gesture (it should show the "your game is saved" message).
+
+**Code:** CSS block "v0.3: touch screens, tablets and phones" at the end of the `<style>` in index.html. JS: `updateHUD` (short day name), `initHUD` (bubble tap, resize), `showCompanion` (shorter bubble on phones), `inputmode` on number inputs, Label Reader focus.
 
 ---
 
