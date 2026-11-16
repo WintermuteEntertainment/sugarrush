@@ -1,8 +1,15 @@
 # Sugar Rush - Project Handoff
 
-**Last updated:** 2026-11-11
+**Last updated:** 2026-11-16
 **Version:** v0.3 (touch screens, tablets, phones). v0.1 backup: `backup/v0.1-2026-11-10/`
 **Status:** Full 7-day week plays end to end with no crashes (automated playthrough Tue-Sun plus a manual Day 1, 2026-11-10). Mechanics overhaul done. Facts checked against Diabetes Canada and Health Canada (section 8). Layout and touch support for iPad and phones done (section 5b), but **not yet tested on a real iPhone, iPad or Android device**. Movable avatar and overlay/tracking system are NOT started.
+
+## 0a. 2026-11-16: title art + dedication screen
+
+- **Title screen** now shows Tim's "Neon Health Heroes" art (from `Downloads\Sugar Rush_ Neon Health Heroes.png`, 1671x941) instead of the emoji row. Converted with ffmpeg to `assets/images/title-art.webp` (1600 wide, 350 KB) and `title-art-960.webp` (165 KB, used on phones/narrow screens via srcset). The "Sugar Rush" h1 stays for screen readers (visually hidden, the logo is in the art).
+- **Dedication** ("For Dr. Patricia Riley", wording unchanged) is now a card in the game's blue/navy palette with a blue-circle mark, and a hint fades in after 1.6 s: "Click or press any key to continue" (desktop) / "Tap to continue" (touch). Before, nothing told players to click.
+- CSS: block "Title art + dedication (2026-11-16)" in index.html (before `.title-art`). JS: `dedication` and `title` passages in `registerSetupPassages()`.
+- Tested in an emulated desktop (1280x800) and phone (375x812). Not yet on real devices.
 
 ## 0. v0.3 (2026-11-11): touch screens, tablets and phones
 

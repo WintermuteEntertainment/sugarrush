@@ -3271,7 +3271,13 @@ function avatarHTML(a, big) {
 function registerSetupPassages() {
   addPassage('dedication', {
     noWrap: true,
-    content: () => '<div class="title-screen" style="cursor:pointer;"><p style="font-style:italic;font-size:1.3em;color:#e0e0e0;">For Dr. Patricia Riley</p></div>',
+    content: () => '<div class="title-screen dedication-screen">' +
+      '<div class="dedication-card">' +
+      '<span class="dedication-ring" aria-hidden="true"></span>' +
+      '<p class="dedication-name">For Dr. Patricia Riley</p>' +
+      '</div>' +
+      '<p class="dedication-hint">' + (matchMedia('(pointer: coarse)').matches ? 'Tap to continue' : 'Click or press any key to continue') + '</p>' +
+      '</div>',
     onEnter: () => {
       const advance = () => {
         document.removeEventListener('keydown', advance);
@@ -3287,7 +3293,9 @@ function registerSetupPassages() {
 
   addPassage('title', {
     noWrap: true,
-    content: () => '<div class="title-screen"><div class="title-art">🍎 🤖 🩸 🥪 ⚽</div><h1>Sugar Rush</h1><p class="subtitle">A week in the life</p>' +
+    content: () => '<div class="title-screen">' +
+      '<img class="title-hero" src="assets/images/title-art.webp" srcset="assets/images/title-art-960.webp 960w, assets/images/title-art.webp 1600w" sizes="(max-width: 700px) 100vw, 960px" width="1600" height="902" alt="Sugar Rush: a group of kids and a friendly robot surrounded by foods">' +
+      '<h1 class="visually-hidden">Sugar Rush</h1><p class="subtitle">A week in the life</p>' +
       '<button class="start-btn" id="play-btn">▶ Play</button></div>',
     onEnter: () => {
       hideHUD();

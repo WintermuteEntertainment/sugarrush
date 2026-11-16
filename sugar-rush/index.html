@@ -261,7 +261,7 @@ body {
 /* --- Title Screen --- */
 .title-screen { text-align: center; padding: 60px 20px; }
 .title-screen h1 { font-size: 52px; font-weight: 800; color: var(--text-light); margin-bottom: 12px; letter-spacing: -1px; }
-.title-screen .subtitle { font-size: 18px; color: var(--accent); margin-bottom: 40px; }
+.title-screen .subtitle { font-size: 20px; color: var(--accent); margin-bottom: 40px; }
 .title-screen .start-btn {
   display: inline-block; padding: 16px 48px; background: var(--accent-warm); color: white;
   border: none; border-radius: 10px; font-family: var(--font-body); font-size: 20px;
@@ -635,6 +635,16 @@ body[data-bg="low"] #hud-bg-value, body[data-bg="severe-low"] #hud-bg-value, bod
 .doll-name { margin-top: 6px; font-weight: 700; }
 .dev-emoji { font-size: 32px; }
 .pip-intro { font-size: 64px; text-align: center; animation: floaty 2.5s ease-in-out infinite; }
+/* Title art + dedication (2026-11-16) */
+.title-hero { display: block; width: 100%; max-width: 960px; height: auto; margin: 0 auto 18px; border-radius: 18px; box-shadow: 0 18px 50px rgba(0,0,0,.55), 0 0 0 1px rgba(91,143,185,.35); animation: fadeIn .6s ease-out; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dedication-screen { cursor: pointer; min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+.dedication-card { position: relative; padding: 56px 72px 50px; min-width: min(520px, 90vw); border-radius: 22px; text-align: center; background: radial-gradient(ellipse at 50% 0%, rgba(91,143,185,.28), transparent 70%), linear-gradient(160deg, #22264a, #16213e); border: 1px solid rgba(91,143,185,.45); box-shadow: 0 20px 60px rgba(0,0,0,.5), inset 0 1px rgba(255,255,255,.06); animation: fadeIn 1.2s ease-out; }
+.dedication-ring { display: block; width: 56px; height: 56px; margin: 0 auto 26px; border-radius: 50%; border: 7px solid var(--accent); box-shadow: 0 0 22px rgba(91,143,185,.55); }
+.dedication-name { margin: 0; font-size: 36px; font-style: italic; font-weight: 600; color: var(--text-light); letter-spacing: .3px; }
+.dedication-hint { margin: 0; font-size: 14px; color: var(--accent); opacity: 0; animation: fadeIn .8s ease-out 1.6s forwards; }
+@media (max-width: 600px) { .dedication-card { padding: 32px 26px 28px; } .dedication-name { font-size: 23px; } .title-hero { border-radius: 12px; } }
+@media (prefers-reduced-motion: reduce) { .title-hero, .dedication-card { animation: none; } .dedication-hint { animation: none; opacity: 1; } }
 .title-art { font-size: 34px; letter-spacing: 8px; margin-bottom: 8px; animation: floaty 4s ease-in-out infinite; }
 
 /* Day summary */
